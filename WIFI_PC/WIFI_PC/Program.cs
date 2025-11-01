@@ -4,8 +4,6 @@ using System.Text.Json;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Threading;
-using System.Collections.Generic;
-using System.Linq;
 
 class Program
 {
@@ -44,62 +42,14 @@ class Program
         }
     }
 
-    // ---------- СКАНИРОВАНИЕ Wi-Fi (только Windows) ----------
-    static List<string> ScanNetworks()
-    {
-        try
-        {
-            List<string> networks = new List<string>();
-
-            // Используем netsh, вывод в CP866
-            ProcessStartInfo psi = new ProcessStartInfo("netsh", "wlan show networks mode=Bssid")
-            {
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                StandardOutputEncoding = System.Text.Encoding.GetEncoding(866) // после регистрации
-            };
-
-            using (Process process = Process.Start(psi))
-            {
-                string output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-
-                foreach (var line in output.Split('\n'))
-                {
-                    string trimmed = line.Trim();
-                    if (string.IsNullOrEmpty(trimmed)) continue;
-                    if (trimmed.StartsWith("SSID"))
-                    {
-                        var parts = trimmed.Split(':', 2);
-                        if (parts.Length == 2)
-                        {
-                            string ssid = parts[1].Trim();
-                            if (!string.IsNullOrEmpty(ssid))
-                                networks.Add(ssid);
-                        }
-                    }
-                }
-            }
-
-            return networks.Distinct().ToList();
-        }
-        catch (Exception e)
-        {
-            Log($"Ошибка при сканировании Wi-Fi: {e}", "ERROR");
-            return new List<string>();
-        }
-    }
-
-    // ---------- ПОДКЛЮЧЕНИЕ ----------
+    // ---------- ПОДКЛЮЧЕНИЕ К Wi-Fi ----------
     static void ConnectToNetwork(string ssid)
     {
-        Log($"Подключение к сети {ssid}...", "INFO");
-
+        Log($"Попытка подключения к сети {ssid}...", "INFO");
         try
         {
-            // Подключаемся напрямую через netsh
-            Process.Start("netsh", $"wlan connect ssid=\"{ssid}\" name=\"{ssid}\"").WaitForExit();
-            Thread.Sleep(5000); // ждём, чтобы соединение успело установиться
+            Process.Start("netsh", $"wlan connect ssid=\"{ssid}\" name=\"{ssid}\"")?.WaitForExit();
+            Thread.Sleep(5000);
             Log($"Подключение к {ssid} выполнено (или в процессе)...", "SUCCESS");
         }
         catch (Exception e)
@@ -109,12 +59,9 @@ class Program
     }
 
     // ---------- ОТПРАВКА ДАННЫХ НА ESP ----------
-    static void SendWifiCredentialsToEsp(string pcSsid, string pcPassword)
+    static void SendWifiCredentialsToEsp(string espIp, int espPort, string ssid, string pass)
     {
         Log("Отправка данных на ESP...", "INFO");
-        string espIp = "192.168.4.1";
-        int espPort = 8888;
-
         try
         {
             using (TcpClient client = new TcpClient())
@@ -122,14 +69,14 @@ class Program
                 client.Connect(espIp, espPort);
                 using (NetworkStream stream = client.GetStream())
                 {
-                    string data = $"SET\n{pcSsid}\n{pcPassword}\n";
+                    string data = $"SET\n{ssid}\n{pass}\n";
                     byte[] bytes = System.Text.Encoding.UTF8.GetBytes(data);
                     stream.Write(bytes, 0, bytes.Length);
 
-                    byte[] buffer = new byte[1024];
-                    int read = stream.Read(buffer, 0, buffer.Length);
-                    string response = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
-                    Log($"Ответ от ESP: {response.Trim()}", "SUCCESS");
+                    // Чтение ответа ESP
+                    StreamReader reader = new StreamReader(stream);
+                    string response = reader.ReadLine();
+                    Log($"Ответ от ESP: {response?.Trim()}", "SUCCESS");
                 }
             }
         }
@@ -139,10 +86,67 @@ class Program
         }
     }
 
+    // ---------- ПРИЁМ МАССИВА С ESP ----------
+    static void ReceiveArrayFromEsp()
+    {
+        string espApIp = "192.168.4.1";
+        int espPort = 8888;
+
+        Log("Подключение к ESP AP для получения массива...", "INFO");
+
+        // Подключаемся к AP ESP32
+        ConnectToNetwork("karch_eeg_88005553535");
+
+        Thread.Sleep(5000); // ждём пока соединение стабилизируется
+
+        try
+        {
+            using (TcpClient client = new TcpClient())
+            {
+                client.Connect(espApIp, espPort);
+                using (NetworkStream stream = client.GetStream())
+                using (StreamReader reader = new StreamReader(stream))
+                {
+                    // Отправляем команду GET_ARRAY
+                    byte[] cmdBytes = System.Text.Encoding.UTF8.GetBytes("GET_ARRAY\n");
+                    stream.Write(cmdBytes, 0, cmdBytes.Length);
+
+                    // Чтение всего потока до конца
+                    string data = reader.ReadToEnd();
+
+                    Log("Массив получен от ESP32:", "SUCCESS");
+                    Console.WriteLine(data);
+
+                    // Разбор CSV в массив 5x5
+                    string[] lines = data.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    int[,] arr = new int[5, 5];
+                    for (int i = 0; i < lines.Length && i < 5; i++)
+                    {
+                        string[] nums = lines[i].Split(',');
+                        for (int j = 0; j < nums.Length && j < 5; j++)
+                            arr[i, j] = int.Parse(nums[j]);
+                    }
+
+                    // Печать массива
+                    Console.WriteLine("Массив 5x5:");
+                    for (int i = 0; i < 5; i++)
+                    {
+                        for (int j = 0; j < 5; j++)
+                            Console.Write(arr[i, j] + "\t");
+                        Console.WriteLine();
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Ошибка при получении массива: {e}", "ERROR");
+        }
+    }
+
     // ---------- ОСНОВНОЙ ЦИКЛ ----------
     static void Main()
     {
-        // 🔹 Обязательно для CP866 на Windows
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
         var config = LoadConfig();
@@ -153,29 +157,19 @@ class Program
 
         Log("=== ESP32 Auto-Connector ===", "INFO");
 
-        while (true)
-        {
-            var networks = ScanNetworks();
-            if (networks.Count == 0)
-            {
-                Log("Нет доступных сетей. Повтор через 5 секунд...", "WARN");
-                Thread.Sleep(5000);
-                continue;
-            }
+        // 1️⃣ Отправляем данные домашней сети на ESP
+        SendWifiCredentialsToEsp("192.168.4.1", 8888, pcSsid, pcPass);
 
-            if (networks.Contains(espName))
-            {
-                Log($"Обнаружена ESP-сеть: {espName}", "SUCCESS");
-                ConnectToNetwork(espName);
-                SendWifiCredentialsToEsp(pcSsid, pcPass);
-                Log("Ожидание 10 секунд перед повторной проверкой...", "INFO");
-                Thread.Sleep(10000);
-            }
-            else
-            {
-                Log($"ESP-сеть '{espName}' не найдена. Повтор через 5 секунд...", "WARN");
-                Thread.Sleep(5000);
-            }
-        }
+        // 2️⃣ Ждём немного, пока ESP настроится
+        Log("Ждём 10 секунд, пока ESP применит настройки...", "INFO");
+        Thread.Sleep(10000);
+
+        // 3️⃣ Подключаемся к точке AP ESP и получаем массив
+        ReceiveArrayFromEsp();
+
+        // 4️⃣ После получения массива можно вернуть ПК в домашнюю сеть
+        Log("Возврат к домашней сети...", "INFO");
+        ConnectToNetwork(pcSsid);
+        Log("Готово.", "SUCCESS");
     }
 }

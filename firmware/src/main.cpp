@@ -15,6 +15,7 @@ String savedPass = "";
 void connectToWiFi();
 void handleWiFiReconnection();
 void printNetworkStatus(WiFiClient& client);
+void sendArrayToClient(WiFiClient& client);
 
 void setup() {
   Serial.begin(115200);
@@ -86,6 +87,26 @@ void printNetworkStatus(WiFiClient& client) {
   client.println("=============================");
 }
 
+// ---------- НОВАЯ ФУНКЦИЯ: ОТПРАВКА МАССИВА 5x5 ----------
+void sendArrayToClient(WiFiClient& client) {
+  int arr[5][5];
+  for (int i = 0; i < 5; i++)
+    for (int j = 0; j < 5; j++)
+      arr[i][j] = i * 5 + j + 1;
+
+  for (int i = 0; i < 5; i++) {
+    String line = "";
+    for (int j = 0; j < 5; j++) {
+      line += String(arr[i][j]);
+      if (j < 4) line += ",";
+    }
+    line += "\n";
+    client.print(line);
+  }
+
+  Serial.println("Массив 5x5 отправлен клиенту.");
+}
+
 void loop() {
   handleWiFiReconnection();
 
@@ -121,6 +142,8 @@ void loop() {
     } else if (command == "FORCE_RECONNECT") {
       client.println("Reconnecting...");
       connectToWiFi();
+    } else if (command == "GET_ARRAY") {  // НОВАЯ КОМАНДА
+      sendArrayToClient(client);
     } else {
       client.println("ERROR: Unknown command.");
     }
