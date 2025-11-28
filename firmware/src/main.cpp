@@ -2,20 +2,28 @@
 #include <WiFiClient.h>
 #include <WiFiAP.h>
 #include <Preferences.h>
+#include <math.h>
 
 Preferences prefs;
 WiFiServer server(8888);
 
 unsigned long lastConnectionAttempt = 0;
-const unsigned long CONNECTION_RETRY_INTERVAL = 30000; // 30 секунд
+const unsigned long CONNECTION_RETRY_INTERVAL = 30000;
 bool isConnecting = false;
+bool isStreaming = false;
 String savedSSID = "";
 String savedPass = "";
+
+// Параметры синусоиды - переименовал переменную
+float sineTime = 0.0;  // было: time
+const float SAMPLE_RATE = 100.0; // Гц
+const float FREQUENCY = 1.0;     // Гц
+const float AMPLITUDE = 100.0;   // амплитуда
 
 void connectToWiFi();
 void handleWiFiReconnection();
 void printNetworkStatus(WiFiClient& client);
-void sendArrayToClient(WiFiClient& client);
+void streamSineWave(WiFiClient& client);
 
 void setup() {
   Serial.begin(115200);
@@ -87,24 +95,47 @@ void printNetworkStatus(WiFiClient& client) {
   client.println("=============================");
 }
 
-// ---------- НОВАЯ ФУНКЦИЯ: ОТПРАВКА МАССИВА 5x5 ----------
-void sendArrayToClient(WiFiClient& client) {
-  int arr[5][5];
-  for (int i = 0; i < 5; i++)
-    for (int j = 0; j < 5; j++)
-      arr[i][j] = i * 5 + j + 1;
-
-  for (int i = 0; i < 5; i++) {
-    String line = "";
-    for (int j = 0; j < 5; j++) {
-      line += String(arr[i][j]);
-      if (j < 4) line += ",";
+void streamSineWave(WiFiClient& client) {
+  isStreaming = true;
+  unsigned long lastSampleTime = 0;
+  const unsigned long SAMPLE_INTERVAL = 1000 / SAMPLE_RATE; // мс
+  
+  Serial.println("Starting sine wave streaming...");
+  
+  while (isStreaming && client.connected()) {
+    unsigned long currentTime = millis();
+    
+    if (currentTime - lastSampleTime >= SAMPLE_INTERVAL) {
+      // Генерация синусоидального сигнала - используем sineTime вместо time
+      float value = AMPLITUDE * sin(2 * PI * FREQUENCY * sineTime) + AMPLITUDE;
+      
+      // Отправка данных клиенту
+      client.println(String(value, 2));
+      
+      // Вывод в Serial для отладки
+      Serial.printf("Sine value: %.2f\n", value);
+      
+      // Обновляем sineTime вместо time
+      sineTime += 1.0 / SAMPLE_RATE;
+      lastSampleTime = currentTime;
     }
-    line += "\n";
-    client.print(line);
+    
+    // Проверка команды остановки от клиента
+    if (client.available()) {
+      String command = client.readStringUntil('\n');
+      command.trim();
+      if (command == "STOP_STREAM") {
+        Serial.println("Stop stream command received");
+        isStreaming = false;
+        break;
+      }
+    }
+    
+    delay(1); // Небольшая задержка для стабильности
   }
-
-  Serial.println("Массив 5x5 отправлен клиенту.");
+  
+  isStreaming = false;
+  Serial.println("Streaming stopped");
 }
 
 void loop() {
@@ -113,7 +144,7 @@ void loop() {
   WiFiClient client = server.available();
   if (client) {
     Serial.println("Client connected.");
-    client.setTimeout(5000); // Чтобы не зависало при неактивности клиента
+    client.setTimeout(5000);
 
     String command = client.readStringUntil('\n');
     command.trim();
@@ -142,8 +173,9 @@ void loop() {
     } else if (command == "FORCE_RECONNECT") {
       client.println("Reconnecting...");
       connectToWiFi();
-    } else if (command == "GET_ARRAY") {  // НОВАЯ КОМАНДА
-      sendArrayToClient(client);
+    } else if (command == "START_STREAM") {
+      client.println("OK: Starting data stream");
+      streamSineWave(client);
     } else {
       client.println("ERROR: Unknown command.");
     }
