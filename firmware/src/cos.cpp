@@ -14,16 +14,17 @@ bool isStreaming = false;
 String savedSSID = "";
 String savedPass = "";
 
-// Параметры синусоиды - переименовал переменную
-float sineTime = 0.0;  // было: time
+// Параметры косинусоиды
+float cosineTime = 0.0;
 const float SAMPLE_RATE = 100.0; // Гц
 const float FREQUENCY = 1.0;     // Гц
 const float AMPLITUDE = 100.0;   // амплитуда
+const float OFFSET = AMPLITUDE;  // смещение, чтобы значения были положительными
 
 void connectToWiFi();
 void handleWiFiReconnection();
 void printNetworkStatus(WiFiClient& client);
-void streamSineWave(WiFiClient& client);
+void streamCosineWave(WiFiClient& client);
 
 void setup() {
   Serial.begin(115200);
@@ -95,28 +96,28 @@ void printNetworkStatus(WiFiClient& client) {
   client.println("=============================");
 }
 
-void streamSineWave(WiFiClient& client) {
+void streamCosineWave(WiFiClient& client) {
   isStreaming = true;
   unsigned long lastSampleTime = 0;
   const unsigned long SAMPLE_INTERVAL = 1000 / SAMPLE_RATE; // мс
   
-  Serial.println("Starting sine wave streaming...");
+  Serial.println("Starting cosine wave streaming...");
   
   while (isStreaming && client.connected()) {
     unsigned long currentTime = millis();
     
     if (currentTime - lastSampleTime >= SAMPLE_INTERVAL) {
-      // Генерация синусоидального сигнала - используем sineTime вместо time
-      float value = AMPLITUDE * sin(2 * PI * FREQUENCY * sineTime) + AMPLITUDE;
+      // Генерация косинусоидального сигнала
+      float value = AMPLITUDE * cos(2 * PI * FREQUENCY * cosineTime) + OFFSET;
       
       // Отправка данных клиенту
       client.println(String(value, 2));
       
       // Вывод в Serial для отладки
-      Serial.printf("Sine value: %.2f\n", value);
+      Serial.printf("Cosine value: %.2f\n", value);
       
-      // Обновляем sineTime вместо time
-      sineTime += 1.0 / SAMPLE_RATE;
+      // Обновляем время для следующего семпла
+      cosineTime += 1.0 / SAMPLE_RATE;
       lastSampleTime = currentTime;
     }
     
@@ -174,8 +175,8 @@ void loop() {
       client.println("Reconnecting...");
       connectToWiFi();
     } else if (command == "START_STREAM") {
-      client.println("OK: Starting data stream");
-      streamSineWave(client);
+      client.println("OK: Starting cosine wave stream");
+      streamCosineWave(client);
     } else {
       client.println("ERROR: Unknown command.");
     }
