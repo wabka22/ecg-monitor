@@ -29,4 +29,3 @@
    ```bash
    dotnet build
    dotnet run
-```
