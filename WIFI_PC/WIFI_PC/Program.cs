@@ -25,14 +25,15 @@ class Program
         public string ApPassword { get; set; } = "";
         public string ApIp { get; set; } = "192.168.4.1";
         public int Port { get; set; } = 8888;
-        public string? HomeIp { get; set; }
+        public string? HotspotIp { get; set; } // IP в сети хот-спота
+        public string MacAddress { get; set; } = ""; // MAC-адрес устройства
     }
 
     // Главный класс конфигурации
     class Config
     {
-        public string PcWifiSsid { get; set; } = "";
-        public string PcWifiPassword { get; set; } = "";
+        public string HotspotSsid { get; set; } = "MyHomeWiFi"; // SSID хот-спота компьютера
+        public string HotspotPassword { get; set; } = "mypassword122"; // Пароль хот-спота
         public string Esp1NetworkName { get; set; } = "ESP32_Cos_Streamer";
         public string Esp2NetworkName { get; set; } = "ESP32_Sin_Streamer";
         public string EspNetworkPassword { get; set; } = "12345678";
@@ -108,17 +109,37 @@ class Program
             string output = process.StandardOutput.ReadToEnd();
             process.WaitForExit();
 
-            if (output.Contains(networkName))
+            // Проверяем несколько вариантов
+            if (output.Contains($" {networkName} ") ||
+                output.Contains($": {networkName}") ||
+                output.Contains($"SSID : {networkName}") ||
+                output.Contains($"SSID : {networkName}"))
             {
-                string[] connectedMarkers = { "подключено", "Connected" };
+                // Проверяем статус подключения
+                string[] connectedMarkers = { "State : connected", "Состояние : подключено",
+                                          "State             : connected", "Состояние         : подключено" };
                 foreach (string marker in connectedMarkers)
                 {
-                    int idx = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-                    if (idx >= 0)
+                    if (output.Contains(marker))
                     {
-                        string context = output.Substring(Math.Max(0, idx - 200),
-                                                         Math.Min(400, output.Length - Math.Max(0, idx - 200)));
-                        if (context.Contains(networkName))
+                        return true;
+                    }
+                }
+
+                // Если нашли сеть, но нет явного статуса, проверяем контекст
+                int ssidIndex = output.IndexOf(networkName, StringComparison.OrdinalIgnoreCase);
+                if (ssidIndex >= 0)
+                {
+                    // Берем 200 символов вокруг найденного SSID
+                    int start = Math.Max(0, ssidIndex - 100);
+                    int length = Math.Min(200, output.Length - start);
+                    string context = output.Substring(start, length);
+
+                    // Ищем маркеры подключения в контексте
+                    string[] contextMarkers = { "connected", "подключено", "authenticated", "аутентифицирован" };
+                    foreach (string marker in contextMarkers)
+                    {
+                        if (context.Contains(marker, StringComparison.OrdinalIgnoreCase))
                         {
                             return true;
                         }
@@ -134,25 +155,18 @@ class Program
         }
     }
 
-    // ---------- ПОДКЛЮЧЕНИЕ К СЕТИ ----------
-    static bool ConnectToNetwork(string networkName, string password, bool forceReconnect = false)
+    // ---------- ПОДКЛЮЧЕНИЕ К СЕТИ ESP ----------
+    static bool ConnectToEspNetwork(string networkName, string password)
     {
-        Log($"Подключение к сети {networkName}...", "INFO");
+        Log($"Подключение к сети ESP: {networkName}...", "INFO");
 
         try
         {
-            // Если уже подключены к этой сети и не требуется переподключение
-            if (IsConnectedToNetwork(networkName) && !forceReconnect)
-            {
-                Log($"Уже подключен к сети {networkName}", "SUCCESS");
-                return true;
-            }
-
-            // Сначала отключаемся от текущей сети
+            // Отключаемся от текущей сети
             RunNetshCommand("wlan disconnect", false);
             Thread.Sleep(2000);
 
-            // Создаем профиль WiFi
+            // Создаем XML профиль для WiFi сети
             string profileXml = $@"<?xml version=""1.0""?>
 <WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
     <name>{networkName}</name>
@@ -162,7 +176,7 @@ class Program
         </SSID>
     </SSIDConfig>
     <connectionType>ESS</connectionType>
-    <connectionMode>manual</connectionMode>
+    <connectionMode>auto</connectionMode>
     <MSM>
         <security>
             <authEncryption>
@@ -179,52 +193,130 @@ class Program
     </MSM>
 </WLANProfile>";
 
-            string tempFile = Path.Combine(Path.GetTempPath(), $"wifi_{Guid.NewGuid()}.xml");
+            // Сохраняем профиль во временный файл
+            string tempFile = Path.Combine(Path.GetTempPath(), $"wifi_{Guid.NewGuid().ToString("N").Substring(0, 8)}.xml");
             File.WriteAllText(tempFile, profileXml, Encoding.UTF8);
 
-            try
+            // Удаляем старый профиль если есть
+            RunNetshCommand($"wlan delete profile name=\"{networkName}\"", false);
+            Thread.Sleep(500);
+
+            // Добавляем новый профиль
+            string addResult = RunNetshCommand($"wlan add profile filename=\"{tempFile}\"");
+            if (addResult.Contains("added") || addResult.Contains("добавлен"))
             {
-                // Удаляем старый профиль, добавляем новый
-                RunNetshCommand($"wlan delete profile name=\"{networkName}\"", false);
+                Log("Профиль WiFi успешно добавлен", "SUCCESS");
+            }
+            else
+            {
+                Log($"Ошибка добавления профиля: {addResult}", "WARN");
+            }
+
+            // Подключаемся к сети
+            Log($"Подключаюсь к сети {networkName}...", "INFO");
+            string connectResult = RunNetshCommand($"wlan connect name=\"{networkName}\"");
+
+            if (connectResult.Contains("requested") || connectResult.Contains("выполнен") ||
+                connectResult.Contains("connected") || connectResult.Contains("подключен"))
+            {
+                Log($"Запрос на подключение к {networkName} отправлен", "SUCCESS");
+            }
+            else
+            {
+                Log($"Результат подключения: {connectResult}", "WARN");
+            }
+
+            // Удаляем временный файл
+            try { File.Delete(tempFile); } catch { }
+
+            // Ждем подключения
+            for (int i = 0; i < 15; i++) // Ждем до 15 секунд
+            {
                 Thread.Sleep(1000);
-
-                string addResult = RunNetshCommand($"wlan add profile filename=\"{tempFile}\"");
-
-                if (addResult.Contains("added") || addResult.Contains("успешно") || addResult.Contains("добавлен"))
+                if (IsConnectedToNetwork(networkName))
                 {
-                    // Подключаемся
-                    string connectResult = RunNetshCommand($"wlan connect name=\"{networkName}\"");
+                    Log($"Успешно подключен к сети {networkName}!", "SUCCESS");
+                    Thread.Sleep(2000);
+                    return true;
+                }
 
-                    if (connectResult.Contains("completed") || connectResult.Contains("успешно") || connectResult.Contains("connected"))
-                    {
-                        // Ждем подключения
-                        for (int i = 0; i < 15; i++)
-                        {
-                            Thread.Sleep(1000);
-                            if (IsConnectedToNetwork(networkName))
-                            {
-                                Log($"Подключение к {networkName} установлено!", "SUCCESS");
-                                Thread.Sleep(3000); // Даем время на полное установление соединения
-                                return true;
-                            }
-                            Console.Write(".");
-                        }
-                        Console.WriteLine();
-                        Log("Таймаут подключения", "ERROR");
-                    }
+                if (i % 5 == 0) // Каждые 5 секунд показываем прогресс
+                {
+                    Log($"Ожидание подключения... {i + 1}/15 секунд", "INFO");
                 }
             }
-            finally
-            {
-                if (File.Exists(tempFile)) File.Delete(tempFile);
-            }
+
+            Log("Не удалось подключиться к сети ESP", "ERROR");
+
+            // Показываем доступные сети для диагностики
+            Log("Доступные сети WiFi:", "INFO");
+            string networks = RunNetshCommand("wlan show networks");
+            Console.WriteLine(networks);
+
+            return false;
         }
         catch (Exception e)
         {
-            Log($"Ошибка при подключении: {e.Message}", "ERROR");
+            Log($"Ошибка подключения: {e.Message}", "ERROR");
+            return false;
         }
+    }
 
-        return false;
+    // ---------- РУЧНОЕ ПОДКЛЮЧЕНИЕ К ESP ----------
+    static bool ManualConnectToEsp(string networkName, string password)
+    {
+        Console.Clear();
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
+        Console.WriteLine("║                РУЧНОЕ ПОДКЛЮЧЕНИЕ К ESP                    ║");
+        Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
+        Console.ResetColor();
+
+        Console.WriteLine($"\nДля продолжения подключитесь к сети ESP:");
+        Console.WriteLine($"\nНазвание сети: {networkName}");
+        Console.WriteLine($"Пароль: {password}");
+
+        Console.WriteLine("\nИнструкция:");
+        Console.WriteLine("1. Нажмите на иконку WiFi в правом нижнем углу экрана");
+        Console.WriteLine("2. Найдите сеть " + networkName);
+        Console.WriteLine("3. Нажмите на неё и введите пароль");
+        Console.WriteLine("4. Подождите пока подключится");
+        Console.WriteLine("5. Вернитесь в эту программу и нажмите Enter");
+
+        Console.Write("\nНажмите Enter когда подключитесь...");
+        Console.ReadLine();
+
+        return IsConnectedToNetwork(networkName);
+    }
+
+    // ---------- ВОЗВРАТ К ХОТ-СПОТУ ----------
+    static void ReconnectToHotspot(Config config)
+    {
+        Log("Возвращаюсь в режим хот-спота...", "INFO");
+
+        try
+        {
+            // Отключаемся от текущей сети
+            RunNetshCommand("wlan disconnect", false);
+            Thread.Sleep(2000);
+
+            // Включаем режим хот-спота (если выключен)
+            Log("Проверяю режим хот-спота...", "INFO");
+            var netshOutput = RunNetshCommand("wlan show hostednetwork");
+
+            if (!netshOutput.Contains("Запущена") && !netshOutput.Contains("Started"))
+            {
+                Log("Хот-спот не запущен. Запускаю...", "INFO");
+                RunNetshCommand("wlan start hostednetwork");
+                Thread.Sleep(3000);
+            }
+
+            Log("Компьютер в режиме хот-спота", "SUCCESS");
+        }
+        catch (Exception e)
+        {
+            Log($"Ошибка при возврате в хот-спот: {e.Message}", "ERROR");
+        }
     }
 
     // ---------- ВЫПОЛНЕНИЕ КОМАНД netsh ----------
@@ -326,7 +418,7 @@ class Program
         catch (Exception e) { return $"ERROR: {e.Message}"; }
     }
 
-    // ---------- НОВЫЙ МЕТОД: БЕЗОПАСНАЯ ПРОВЕРКА И ПОДКЛЮЧЕНИЕ ----------
+    // ---------- БЕЗОПАСНАЯ ПРОВЕРКА И ПОДКЛЮЧЕНИЕ К ESP ----------
     static string SafelyConnectToEsp(EspDeviceConfig device, Config globalConfig, string operationName = "операции")
     {
         Console.Clear();
@@ -343,7 +435,7 @@ class Program
 
             Console.WriteLine("\nВыберите способ подключения:");
             Console.WriteLine("1. Автоматическое подключение");
-            Console.WriteLine("2. Показать инструкцию для ручного подключения");
+            Console.WriteLine("2. Ручное подключение (рекомендуется)");
             Console.WriteLine("3. Отмена");
 
             Console.Write("\nВаш выбор (1-3): ");
@@ -352,15 +444,14 @@ class Program
             switch (choice)
             {
                 case "1":
-                    if (!ConnectToNetwork(device.ApSsid, device.ApPassword))
+                    if (!ConnectToEspNetwork(device.ApSsid, device.ApPassword))
                     {
                         Log($"Не удалось подключиться к WiFi сети {device.ApSsid}", "ERROR");
                         return null;
                     }
                     break;
                 case "2":
-                    ShowManualConnectionInstructions(device.ApSsid, device.ApPassword);
-                    if (!IsConnectedToNetwork(device.ApSsid))
+                    if (!ManualConnectToEsp(device.ApSsid, device.ApPassword))
                     {
                         Log($"Не удалось подключиться к WiFi сети {device.ApSsid}", "ERROR");
                         return null;
@@ -420,7 +511,7 @@ class Program
             RunNetshCommand("wlan disconnect", false);
             Thread.Sleep(3000);
 
-            if (ConnectToNetwork(device.ApSsid, device.ApPassword, true))
+            if (ManualConnectToEsp(device.ApSsid, device.ApPassword))
             {
                 Thread.Sleep(5000); // Даем ESP время на инициализацию
 
@@ -433,22 +524,6 @@ class Program
         }
 
         return null;
-    }
-
-    // ---------- ИНСТРУКЦИЯ ДЛЯ РУЧНОГО ПОДКЛЮЧЕНИЯ ----------
-    static void ShowManualConnectionInstructions(string networkName, string password)
-    {
-        Console.Clear();
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║               РУЧНОЕ ПОДКЛЮЧЕНИЕ К ESP                      ║");
-        Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
-        Console.ResetColor();
-        Console.WriteLine($"\n1. Подключитесь к WiFi сети: {networkName}");
-        Console.WriteLine($"2. Используйте пароль: {password}");
-        Console.WriteLine("\n3. Вернитесь в это окно и нажмите Enter");
-        Console.Write("\nНажмите Enter, когда подключитесь...");
-        Console.ReadLine();
     }
 
     // ---------- ОТПРАВКА ДАННЫХ WIFI НА ESP ----------
@@ -470,9 +545,9 @@ class Program
                     int bytesRead = stream.Read(buffer, 0, buffer.Length);
                     string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
 
-                    if (response.Contains("OK") || response.Contains("Success"))
+                    if (response.Contains("OK"))
                     {
-                        Log($"Данные WiFi отправлены успешно", "SUCCESS", deviceTag);
+                        Log($"Данные WiFi отправлены успешно. ESP перезагрузится.", "SUCCESS", deviceTag);
                         return true;
                     }
                     else
@@ -511,7 +586,8 @@ class Program
                         ApSsid = config.Esp1NetworkName,
                         ApPassword = config.EspNetworkPassword,
                         ApIp = "192.168.4.1",
-                        Port = 8888
+                        Port = 8888,
+                        MacAddress = "c4:de:e2:19:2b:6c" // MAC-адрес ESP32_Cos
                     });
 
                     config.EspDevices.Add(new EspDeviceConfig
@@ -520,7 +596,8 @@ class Program
                         ApSsid = config.Esp2NetworkName,
                         ApPassword = config.EspNetworkPassword,
                         ApIp = "192.168.4.1",
-                        Port = 8888
+                        Port = 8888,
+                        MacAddress = "cc:7b:5c:34:cc:f8" // MAC-адрес ESP32_Sin
                     });
 
                     SaveConfig(config);
@@ -530,10 +607,11 @@ class Program
             }
             else
             {
+                // Конфигурация для работы через хот-спот
                 Config defaultConfig = new Config
                 {
-                    PcWifiSsid = "MyHomeWiFi",
-                    PcWifiPassword = "mypassword122",
+                    HotspotSsid = "MyHomeWiFi", // SSID вашей домашней сети
+                    HotspotPassword = "mypassword122", // Пароль вашей домашней сети
                     Esp1NetworkName = "ESP32_Cos_Streamer",
                     Esp2NetworkName = "ESP32_Sin_Streamer",
                     EspNetworkPassword = "12345678",
@@ -545,7 +623,9 @@ class Program
                             ApSsid = "ESP32_Cos_Streamer",
                             ApPassword = "12345678",
                             ApIp = "192.168.4.1",
-                            Port = 8888
+                            Port = 8888,
+                            HotspotIp = "192.168.137.102", // Прямое назначение IP из вашей сети
+                            MacAddress = "c4:de:e2:19:2b:6c"
                         },
                         new EspDeviceConfig
                         {
@@ -553,13 +633,16 @@ class Program
                             ApSsid = "ESP32_Sin_Streamer",
                             ApPassword = "12345678",
                             ApIp = "192.168.4.1",
-                            Port = 8888
+                            Port = 8888,
+                            HotspotIp = "192.168.137.173", // Прямое назначение IP из вашей сети
+                            MacAddress = "cc:7b:5c:34:cc:f8"
                         }
                     }
                 };
 
                 SaveConfig(defaultConfig);
                 Log($"Создан новый файл конфигурации: {ConfigFile}", "INFO");
+                Log($"ВАЖНО: В конфиг уже добавлены IP-адреса ваших ESP из сети {defaultConfig.HotspotSsid}!", "SUCCESS");
                 return defaultConfig;
             }
         }
@@ -726,7 +809,7 @@ class Program
     {
         Console.WriteLine("\nГЛАВНОЕ МЕНЮ:");
         Console.WriteLine("--- ОДИНОЧНЫЕ ОПЕРАЦИИ ---");
-        Console.WriteLine("1. Настроить ESP на домашнюю WiFi");
+        Console.WriteLine("1. Настроить ESP на домашнюю сеть компьютера");
         Console.WriteLine("2. Начать стриминг с одной ESP");
         Console.WriteLine("3. Изменить конфигурацию");
         Console.WriteLine("4. Найти ESP в домашней сети");
@@ -739,12 +822,13 @@ class Program
         Console.WriteLine("\n--- СЛУЖЕБНЫЕ ---");
         Console.WriteLine("8. Остановить все активные стримы");
         Console.WriteLine("9. Проверить доступность ESP");
-        Console.WriteLine("10. Выход");
-        Console.WriteLine("11. Тестирование команд ESP");
+        Console.WriteLine("10. Диагностика WiFi");
+        Console.WriteLine("11. Прямое подключение к ESP (по IP)");
+        Console.WriteLine("12. Выход");
 
         Console.WriteLine("\n[h] Помощь по командам ESP");
 
-        Console.Write("\nВаш выбор (1-11): ");
+        Console.Write("\nВаш выбор (1-12): ");
         return Console.ReadLine()?.ToLower().Trim() ?? "";
     }
 
@@ -753,18 +837,31 @@ class Program
     {
         Console.ForegroundColor = ConsoleColor.Magenta;
         Console.WriteLine("╔══════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║       ESP32 Dual Stream Manager - Параллельный стриминг     ║");
+        Console.WriteLine("║       ESP32 Dual Stream Manager - Работа через домашнюю сеть       ║");
         Console.WriteLine("╚══════════════════════════════════════════════════════════════╝");
         Console.ResetColor();
+
+        Console.WriteLine($"\nРежим: РАБОТА ЧЕРЕЗ ДОМАШНЮЮ СЕТЬ");
+        Console.WriteLine($"Домашняя сеть: {config.HotspotSsid}");
 
         Console.WriteLine($"\nЗарегистрированные устройства: {config.EspDevices.Count}");
 
         foreach (var device in config.EspDevices)
         {
-            bool isConnected = IsConnectedToNetwork(device.ApSsid);
-            Console.ForegroundColor = isConnected ? ConsoleColor.Green : ConsoleColor.Yellow;
-            Console.WriteLine($"  {(isConnected ? "✓" : "✗")} {device.Name}: {device.ApSsid}");
-            Console.ResetColor();
+            Console.Write($"  {device.Name}: ");
+            if (!string.IsNullOrEmpty(device.HotspotIp))
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.Write($"✓ {device.HotspotIp}");
+                Console.ResetColor();
+                Console.WriteLine($" (MAC: {device.MacAddress})");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"✗ IP не назначен");
+                Console.ResetColor();
+            }
         }
 
         Console.WriteLine($"\nАктивных стримов: {_activeWorkers.Count}");
@@ -780,7 +877,7 @@ class Program
 
     // ==================== ОСНОВНЫЕ ФУНКЦИИ ====================
 
-    // ---------- 1. НАСТРОЙКА ОДНОЙ ESP ----------
+    // ---------- 1. НАСТРОЙКА ОДНОЙ ESP НА ДОМАШНЮЮ СЕТЬ ----------
     static void ConfigureSingleEsp(Config config)
     {
         if (config.EspDevices.Count == 0)
@@ -808,35 +905,39 @@ class Program
         // Останавливаем все активные стримы ПЕРЕД настройкой
         StopAllActiveStreams();
 
-        string espIp = SafelyConnectToEsp(device, config, "НАСТРОЙКА WIFI");
+        string espIp = SafelyConnectToEsp(device, config, "НАСТРОЙКА НА ДОМАШНЮЮ СЕТЬ");
 
         if (string.IsNullOrEmpty(espIp)) return;
 
-        Console.WriteLine($"\n=== НАСТРОЙКА ДОМАШНЕЙ WIFI ДЛЯ {device.Name} ===");
-        Console.WriteLine($"\nТекущие данные домашней WiFi:");
-        Console.WriteLine($"SSID: {config.PcWifiSsid}");
-        Console.WriteLine($"Пароль: {new string('*', config.PcWifiPassword.Length)}");
+        Console.WriteLine($"\n=== НАСТРОЙКА ДОМАШНЕЙ СЕТИ ДЛЯ {device.Name} ===");
+        Console.WriteLine($"\nТекущие данные домашней сети:");
+        Console.WriteLine($"SSID: {config.HotspotSsid}");
+        Console.WriteLine($"Пароль: {new string('*', config.HotspotPassword.Length)}");
 
         Console.Write("\nИспользовать эти данные? (y/n): ");
         if (Console.ReadLine()?.ToLower() != "y")
         {
-            Console.Write("Введите SSID вашей домашней WiFi: ");
-            config.PcWifiSsid = Console.ReadLine();
-            Console.Write("Введите пароль: ");
-            config.PcWifiPassword = Console.ReadLine();
+            Console.Write("Введите SSID вашей домашней сети: ");
+            config.HotspotSsid = Console.ReadLine();
+            Console.Write("Введите пароль домашней сети: ");
+            config.HotspotPassword = Console.ReadLine();
             SaveConfig(config);
         }
 
-        bool success = SendWifiCredentialsToEsp(espIp, device.Port, config.PcWifiSsid, config.PcWifiPassword, device.Name);
+        bool success = SendWifiCredentialsToEsp(espIp, device.Port, config.HotspotSsid, config.HotspotPassword, device.Name);
         if (success)
         {
-            Log($"\n{device.Name} перезагрузится для подключения к домашней сети.", "INFO");
-            for (int i = 10; i > 0; i--)
-            {
-                Console.Write($"\rПерезагрузка... {i} секунд ");
-                Thread.Sleep(1000);
-            }
-            Console.WriteLine();
+            Log($"\n{device.Name} перезагружается и попытается подключиться к домашней сети.", "INFO");
+            Log("Это займет 30-40 секунд...", "INFO");
+
+            // Даем ESP время на перезагрузку
+            Thread.Sleep(30000);
+
+            Log("Ожидание подключения ESP к домашней сети...", "INFO");
+            Thread.Sleep(10000);
+
+            // Пробуем найти ESP в домашней сети
+            FindAndSaveEspInNetwork(device, config);
         }
         WaitForKey();
     }
@@ -869,14 +970,31 @@ class Program
         // Останавливаем все активные стримы перед новым стримингом
         StopAllActiveStreams();
 
-        string espIp = SafelyConnectToEsp(device, config, "СТРИМИНГ ДАННЫХ");
-        if (string.IsNullOrEmpty(espIp)) return;
+        // Пробуем сначала через домашнюю сеть, если есть IP
+        if (!string.IsNullOrEmpty(device.HotspotIp) && CheckEspAvailability(device.HotspotIp, device.Port, 1000))
+        {
+            Log($"Подключение через домашнюю сеть: {device.HotspotIp}", "INFO", device.Name);
+            StartSingleStream(device, device.HotspotIp);
+        }
+        else
+        {
+            // Иначе через AP режим ESP
+            string espIp = SafelyConnectToEsp(device, config, "СТРИМИНГ ДАННЫХ");
+            if (!string.IsNullOrEmpty(espIp))
+            {
+                StartSingleStream(device, espIp);
+            }
+        }
+        WaitForKey();
+    }
 
+    static void StartSingleStream(EspDeviceConfig device, string ip)
+    {
         try
         {
             using (TcpClient client = new TcpClient())
             {
-                client.Connect(espIp, device.Port);
+                client.Connect(ip, device.Port);
                 using (NetworkStream stream = client.GetStream())
                 using (StreamReader reader = new StreamReader(stream))
                 {
@@ -931,7 +1049,6 @@ class Program
         {
             Log($"Ошибка: {e.Message}", "ERROR", device.Name);
         }
-        WaitForKey();
     }
 
     // ---------- 6. ПАРАЛЛЕЛЬНАЯ НАСТРОЙКА ДВУХ ESP ----------
@@ -949,13 +1066,13 @@ class Program
         Console.WriteLine($"1. {config.EspDevices[0].Name}");
         Console.WriteLine($"2. {config.EspDevices[1].Name}");
 
-        Console.Write("\nИспользовать текущие данные WiFi? (y/n): ");
+        Console.Write("\nИспользовать текущие данные домашней сети? (y/n): ");
         if (Console.ReadLine()?.ToLower() != "y")
         {
-            Console.Write("Введите SSID домашней WiFi: ");
-            config.PcWifiSsid = Console.ReadLine();
-            Console.Write("Введите пароль: ");
-            config.PcWifiPassword = Console.ReadLine();
+            Console.Write("Введите SSID вашей домашней сети: ");
+            config.HotspotSsid = Console.ReadLine();
+            Console.Write("Введите пароль домашней сети: ");
+            config.HotspotPassword = Console.ReadLine();
             SaveConfig(config);
         }
 
@@ -963,41 +1080,70 @@ class Program
 
         // Настройка первой ESP
         Log("\n=== НАСТРОЙКА ПЕРВОЙ ESP ===", "INFO");
-        StopAllActiveStreams(); // Останавливаем все стримы перед настройкой
+        StopAllActiveStreams();
 
         string ip1 = SafelyConnectToEsp(config.EspDevices[0], config, "НАСТРОЙКА ESP1");
         if (!string.IsNullOrEmpty(ip1))
         {
             bool success1 = SendWifiCredentialsToEsp(ip1, config.EspDevices[0].Port,
-                config.PcWifiSsid, config.PcWifiPassword, config.EspDevices[0].Name);
+                config.HotspotSsid, config.HotspotPassword, config.EspDevices[0].Name);
             allSuccess &= success1;
 
             if (success1)
             {
-                Log("Ожидание 10 секунд...", "INFO");
-                Thread.Sleep(10000);
+                Log($"{config.EspDevices[0].Name} перезагружается. Ждем 20 секунд...", "INFO");
+                Thread.Sleep(20000);
             }
         }
         else allSuccess = false;
 
         // Настройка второй ESP
         Log("\n=== НАСТРОЙКА ВТОРОЙ ESP ===", "INFO");
-        StopAllActiveStreams(); // Снова останавливаем
+        StopAllActiveStreams();
 
         string ip2 = SafelyConnectToEsp(config.EspDevices[1], config, "НАСТРОЙКА ESP2");
         if (!string.IsNullOrEmpty(ip2))
         {
             bool success2 = SendWifiCredentialsToEsp(ip2, config.EspDevices[1].Port,
-                config.PcWifiSsid, config.PcWifiPassword, config.EspDevices[1].Name);
+                config.HotspotSsid, config.HotspotPassword, config.EspDevices[1].Name);
             allSuccess &= success2;
+
+            if (success2)
+            {
+                Log($"{config.EspDevices[1].Name} перезагружается. Ждем 20 секунд...", "INFO");
+                Thread.Sleep(20000);
+            }
         }
         else allSuccess = false;
 
         if (allSuccess)
         {
-            Log("\nОбе ESP настроены и перезагружаются.", "SUCCESS");
-            Log("Через 20 секунд используйте 'Найти ESP в домашней сети'.", "INFO");
-            Thread.Sleep(20000);
+            Log("\nОбе ESP настроены. Ожидание подключения к домашней сети...", "SUCCESS");
+            Thread.Sleep(10000);
+
+            // Ищем обе ESP в домашней сети
+            bool foundAny = false;
+            foreach (var device in config.EspDevices)
+            {
+                if (FindAndSaveEspInNetwork(device, config))
+                {
+                    foundAny = true;
+                }
+            }
+
+            if (foundAny)
+            {
+                SaveConfig(config);
+                Log("\nНастройка завершена. Используйте меню 7 для параллельного стриминга.", "SUCCESS");
+            }
+            else
+            {
+                Log("\nESP не найдены в домашней сети. Проверьте:", "WARN");
+                Console.WriteLine("1. ESP подключены к питанию");
+                Console.WriteLine("2. Домашняя сеть работает");
+                Console.WriteLine("3. ESP подключены к домашней сети");
+                Console.WriteLine("4. Попробуйте найти ESP через меню 4");
+            }
         }
         WaitForKey();
     }
@@ -1012,63 +1158,54 @@ class Program
             return;
         }
 
-        Console.WriteLine("\n=== ПАРАЛЛЕЛЬНЫЙ СТРИМИНГ С ДВУХ ESP ===");
-        Log("Эта операция выполняется в ДВА ЭТАПА:", "INFO");
-        Log("1. Сначала подключимся к первой ESP и начнем стриминг", "INFO");
-        Log("2. Затем подключимся ко второй ESP и начнем стриминг", "INFO");
-        Log("3. Данные с обоих устройств будут отображаться параллельно", "INFO");
+        Console.WriteLine("\n=== ПАРАЛЛЕЛЬНЫЙ СТРИМИНГ ЧЕРЕЗ ДОМАШНЮЮ СЕТЬ ===");
 
-        Console.Write("\nНажмите Enter чтобы начать...");
-        Console.ReadLine();
+        // Проверяем IP в домашней сети
+        bool hasIp1 = !string.IsNullOrEmpty(config.EspDevices[0].HotspotIp);
+        bool hasIp2 = !string.IsNullOrEmpty(config.EspDevices[1].HotspotIp);
 
-        // Останавливаем все активные стримы перед началом
-        StopAllActiveStreams();
-
-        var streamTasks = new List<Task<bool>>();
-        var workers = new List<StreamWorker>();
-
-        // Этап 1: Первое устройство
-        Log($"\n=== ЭТАП 1: ПОДКЛЮЧЕНИЕ К {config.EspDevices[0].Name} ===", "INFO");
-        string ip1 = SafelyConnectToEsp(config.EspDevices[0], config, "СТРИМИНГ ESP1");
-        if (string.IsNullOrEmpty(ip1))
+        if (!hasIp1 || !hasIp2)
         {
-            Log("Не удалось подключиться к первой ESP. Прерывание.", "ERROR");
+            Log("Для параллельного стриминга необходимо сначала найти ESP в домашней сети (меню 4).", "ERROR");
             WaitForKey();
             return;
         }
 
-        var worker1 = new StreamWorker(config.EspDevices[0], ip1);
+        // Проверяем доступность ESP через домашнюю сеть
+        Log($"Проверяем доступность {config.EspDevices[0].Name}...", "INFO");
+        if (!CheckEspAvailability(config.EspDevices[0].HotspotIp, config.EspDevices[0].Port, 3000))
+        {
+            Log($"{config.EspDevices[0].Name} недоступна по адресу {config.EspDevices[0].HotspotIp}", "ERROR");
+            WaitForKey();
+            return;
+        }
+
+        Log($"Проверяем доступность {config.EspDevices[1].Name}...", "INFO");
+        if (!CheckEspAvailability(config.EspDevices[1].HotspotIp, config.EspDevices[1].Port, 3000))
+        {
+            Log($"{config.EspDevices[1].Name} недоступна по адресу {config.EspDevices[1].HotspotIp}", "ERROR");
+            WaitForKey();
+            return;
+        }
+
+        StopAllActiveStreams();
+
+        var workers = new List<StreamWorker>();
+        var streamTasks = new List<Task<bool>>();
+
+        // Запускаем оба стрима через домашнюю сеть
+        var worker1 = new StreamWorker(config.EspDevices[0], config.EspDevices[0].HotspotIp);
         workers.Add(worker1);
         streamTasks.Add(Task.Run(() => worker1.StartStreaming()));
 
-        Log($"Стриминг с {config.EspDevices[0].Name} запущен в фоне.", "SUCCESS");
-        Thread.Sleep(3000);
-
-        // Этап 2: Второе устройство
-        Log($"\n=== ЭТАП 2: ПОДКЛЮЧЕНИЕ К {config.EspDevices[1].Name} ===", "INFO");
-
-        Log("Отключаемся от первой сети WiFi...", "INFO");
-        RunNetshCommand("wlan disconnect", false);
-        Thread.Sleep(3000);
-
-        string ip2 = SafelyConnectToEsp(config.EspDevices[1], config, "СТРИМИНГ ESP2");
-        if (string.IsNullOrEmpty(ip2))
-        {
-            Log("Не удалось подключиться ко второй ESP. Останавливаем первый стрим.", "ERROR");
-            StopAllActiveStreams();
-            WaitForKey();
-            return;
-        }
-
-        var worker2 = new StreamWorker(config.EspDevices[1], ip2);
+        var worker2 = new StreamWorker(config.EspDevices[1], config.EspDevices[1].HotspotIp);
         workers.Add(worker2);
         streamTasks.Add(Task.Run(() => worker2.StartStreaming()));
 
-        Log($"Стриминг с {config.EspDevices[1].Name} запущен в фоне.", "SUCCESS");
+        Thread.Sleep(2000);
         Log("\n=== ПАРАЛЛЕЛЬНЫЙ СТРИМИНГ АКТИВЕН ===", "SUCCESS");
-        Log("Данные с двух ESP:", "INFO");
-        Log($"  СЛЕВА:  {config.EspDevices[0].Name} (косинус)", "INFO");
-        Log($"  СПРАВА: {config.EspDevices[1].Name} (синус)", "INFO");
+        Log($"  СЛЕВА:  {config.EspDevices[0].Name} (косинус) - {config.EspDevices[0].HotspotIp}", "INFO");
+        Log($"  СПРАВА: {config.EspDevices[1].Name} (синус) - {config.EspDevices[1].HotspotIp}", "INFO");
         Log("\nНажмите 'Q' чтобы остановить оба стрима...", "INFO");
 
         var displayTask = Task.Run(() => DisplayParallelStreams(workers));
@@ -1084,27 +1221,6 @@ class Program
         }
 
         StopAllActiveStreams();
-
-        try
-        {
-            Task.WaitAll(streamTasks.ToArray(), 2000);
-        }
-        catch (Exception ex)
-        {
-            Log($"Ошибка при остановке: {ex.Message}", "ERROR");
-        }
-
-        try
-        {
-            if (displayTask.Status == TaskStatus.Running)
-            {
-                var cts = new CancellationTokenSource();
-                cts.CancelAfter(1000);
-                displayTask.Wait(cts.Token);
-            }
-        }
-        catch { }
-
         Log("Параллельный стриминг остановлен.", "SUCCESS");
         WaitForKey();
     }
@@ -1152,28 +1268,48 @@ class Program
             foreach (var device in config.EspDevices)
             {
                 Console.WriteLine($"\nПроверка {device.Name}...");
-                bool isConnected = IsConnectedToNetwork(device.ApSsid);
 
+                // Проверяем через домашнюю сеть
+                if (!string.IsNullOrEmpty(device.HotspotIp))
+                {
+                    Console.Write($"  Домашняя сеть: {device.HotspotIp}");
+
+                    bool isHotspotAvailable = CheckEspAvailability(device.HotspotIp, device.Port, 2000);
+                    if (isHotspotAvailable)
+                    {
+                        Console.WriteLine($" - ✓ Доступна");
+                        Log($"{device.Name} доступен через домашнюю сеть", "SUCCESS", device.Name);
+                    }
+                    else
+                    {
+                        Console.WriteLine($" - ✗ Недоступен");
+                        Log($"{device.Name} не доступен через домашнюю сеть", "WARN", device.Name);
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"  Домашняя сеть: ✗ IP не назначен");
+                }
+
+                // Проверяем AP режим
+                bool isConnected = IsConnectedToNetwork(device.ApSsid);
                 if (isConnected)
                 {
-                    Console.Write($"  WiFi: ✓ Подключен");
+                    Console.Write($"  AP режим: ✓ Подключен");
 
                     bool isAvailable = CheckEspAvailability(device.ApIp, device.Port, 2000);
                     if (isAvailable)
                     {
                         Console.WriteLine($", ESP: ✓ Отвечает");
-                        Log($"{device.Name} доступен", "SUCCESS", device.Name);
                     }
                     else
                     {
                         Console.WriteLine($", ESP: ✗ Не отвечает");
-                        Log($"{device.Name} не отвечает (возможно, занят стримингом)", "WARN", device.Name);
                     }
                 }
                 else
                 {
-                    Console.WriteLine($"  WiFi: ✗ Не подключен");
-                    Log($"{device.Name}: не подключен к WiFi", "WARN", device.Name);
+                    Console.WriteLine($"  AP режим: ✗ Не подключен");
                 }
             }
         }
@@ -1182,21 +1318,18 @@ class Program
             var device = config.EspDevices[choice - 1];
             Console.WriteLine($"\nПроверка {device.Name}...");
 
-            bool isConnected = IsConnectedToNetwork(device.ApSsid);
-
-            if (isConnected)
+            // Проверяем через домашнюю сеть
+            if (!string.IsNullOrEmpty(device.HotspotIp))
             {
-                Console.Write($"  WiFi: ✓ Подключен");
-
-                bool isAvailable = CheckEspAvailability(device.ApIp, device.Port, 2000);
-                if (isAvailable)
+                Console.WriteLine($"\nПроверка через домашнюю сеть ({device.HotspotIp})...");
+                bool isHotspotAvailable = CheckEspAvailability(device.HotspotIp, device.Port, 3000);
+                if (isHotspotAvailable)
                 {
-                    Console.WriteLine($", ESP: ✓ Отвечает");
+                    Console.WriteLine($"  ✓ Доступен");
 
-                    // Пробуем получить статус
                     try
                     {
-                        string status = SendCommandToEsp(device.ApIp, device.Port, "STATUS", 3000);
+                        string status = SendCommandToEsp(device.HotspotIp, device.Port, "STATUS", 3000);
                         Console.WriteLine($"\nСтатус ESP:\n{status}");
                     }
                     catch (Exception ex)
@@ -1206,15 +1339,231 @@ class Program
                 }
                 else
                 {
-                    Console.WriteLine($", ESP: ✗ Не отвечает");
-                    Log("ESP не отвечает (возможно, занят стримингом)", "WARN", device.Name);
+                    Console.WriteLine($"  ✗ Недоступен");
                 }
             }
             else
             {
-                Console.WriteLine($"  WiFi: ✗ Не подключен");
-                Log("Не подключен к WiFi сети ESP", "WARN", device.Name);
+                Console.WriteLine($"  ✗ IP в домашней сети не назначен");
             }
+        }
+
+        WaitForKey();
+    }
+
+    // ---------- 10. ДИАГНОСТИКА WIFI ----------
+    static void DiagnoseWifi(Config config)
+    {
+        Console.Clear();
+        Log("=== ДИАГНОСТИКА WIFI ПОДКЛЮЧЕНИЯ ===", "INFO");
+
+        Console.WriteLine("\n1. Проверить текущее подключение");
+        Console.WriteLine("2. Показать доступные сети");
+        Console.WriteLine("3. Проверить ARP-таблицу (устройства в сети)");
+        Console.WriteLine("4. Пинг ESP устройств");
+        Console.WriteLine("5. Вернуться в меню");
+
+        Console.Write("\nВаш выбор (1-5): ");
+        string choice = Console.ReadLine();
+
+        switch (choice)
+        {
+            case "1":
+                CheckCurrentConnection();
+                break;
+            case "2":
+                ShowAvailableNetworks();
+                break;
+            case "3":
+                ShowArpTable();
+                break;
+            case "4":
+                PingEspDevices(config);
+                break;
+            default:
+                return;
+        }
+
+        WaitForKey();
+    }
+
+    static void CheckCurrentConnection()
+    {
+        Log("Текущее состояние WiFi:", "INFO");
+        string result = RunNetshCommand("wlan show interfaces");
+        Console.WriteLine("\n" + result);
+    }
+
+    static void ShowAvailableNetworks()
+    {
+        Log("Доступные WiFi сети:", "INFO");
+        string result = RunNetshCommand("wlan show networks");
+        Console.WriteLine("\n" + result);
+    }
+
+    static void ShowArpTable()
+    {
+        Log("ARP-таблица (устройства в сети):", "INFO");
+        try
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "arp",
+                    Arguments = "-a",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.GetEncoding(866)
+                }
+            };
+
+            process.Start();
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+
+            Console.WriteLine("\n" + output);
+
+            // Парсим вывод для поиска ESP устройств
+            string[] lines = output.Split('\n');
+            bool foundEsp = false;
+
+            foreach (string line in lines)
+            {
+                if (line.Contains("192.168.137.") || line.Contains("192.168.1.") || line.Contains("192.168.0."))
+                {
+                    // Ищем MAC-адреса ESP
+                    if (line.Contains("c4:de:e2:19:2b:6c") || line.Contains("c4-de-e2-19-2b-6c") ||
+                        line.Contains("cc:7b:5c:34:cc:f8") || line.Contains("cc-7b-5c-34-cc-f8"))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine($"НАЙДЕНА ESP: {line.Trim()}");
+                        Console.ResetColor();
+                        foundEsp = true;
+                    }
+                }
+            }
+
+            if (!foundEsp)
+            {
+                Log("ESP устройства не найдены в ARP-таблице", "WARN");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"Ошибка при получении ARP-таблицы: {ex.Message}", "ERROR");
+        }
+    }
+
+    static void PingEspDevices(Config config)
+    {
+        Log("Пинг ESP устройств:", "INFO");
+
+        foreach (var device in config.EspDevices)
+        {
+            if (!string.IsNullOrEmpty(device.HotspotIp))
+            {
+                Console.Write($"\nПинг {device.Name} ({device.HotspotIp}): ");
+
+                try
+                {
+                    var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "ping",
+                            Arguments = $"-n 2 -w 1000 {device.HotspotIp}",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        }
+                    };
+
+                    process.Start();
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+
+                    if (output.Contains("TTL=") || output.Contains("Превышен"))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("✓ Доступен");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("✗ Недоступен");
+                        Console.ResetColor();
+                    }
+                }
+                catch
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("✗ Ошибка пинга");
+                    Console.ResetColor();
+                }
+            }
+            else
+            {
+                Console.WriteLine($"\n{device.Name}: IP не назначен");
+            }
+        }
+    }
+
+    // ---------- 11. ПРЯМОЕ ПОДКЛЮЧЕНИЕ К ESP (ПО IP) ----------
+    static void DirectConnectToEsp(Config config)
+    {
+        Console.Clear();
+        Log("=== ПРЯМОЕ ПОДКЛЮЧЕНИЕ К ESP ПО IP ===", "INFO");
+
+        Console.WriteLine("\nВведите IP-адрес ESP:");
+        Console.Write("IP: ");
+        string ip = Console.ReadLine();
+
+        Console.Write("Порт (по умолчанию 8888): ");
+        string portStr = Console.ReadLine();
+        int port = string.IsNullOrEmpty(portStr) ? 8888 : int.Parse(portStr);
+
+        if (string.IsNullOrEmpty(ip))
+        {
+            Log("IP-адрес не введен", "ERROR");
+            WaitForKey();
+            return;
+        }
+
+        // Проверяем доступность
+        Log($"Проверка доступности {ip}:{port}...", "INFO");
+        if (CheckEspAvailability(ip, port, 2000))
+        {
+            Log($"ESP доступна по адресу {ip}:{port}", "SUCCESS");
+
+            // Пробуем подключиться и получить статус
+            string status = SendCommandToEsp(ip, port, "STATUS", 3000);
+            Console.WriteLine($"\nСтатус ESP:\n{status}");
+
+            // Предлагаем начать стриминг
+            Console.Write("\nНачать стриминг с этого устройства? (y/n): ");
+            if (Console.ReadLine()?.ToLower() == "y")
+            {
+                // Создаем временную конфигурацию устройства
+                var tempDevice = new EspDeviceConfig
+                {
+                    Name = "ESP_Direct",
+                    ApSsid = "Direct_Connection",
+                    ApPassword = "",
+                    ApIp = ip,
+                    Port = port,
+                    HotspotIp = ip
+                };
+
+                StopAllActiveStreams();
+                StartSingleStream(tempDevice, ip);
+            }
+        }
+        else
+        {
+            Log($"ESP недоступна по адресу {ip}:{port}", "ERROR");
         }
 
         WaitForKey();
@@ -1226,14 +1575,14 @@ class Program
         Console.Clear();
         Console.WriteLine("=== РЕДАКТИРОВАНИЕ КОНФИГУРАЦИИ ===\n");
 
-        Console.WriteLine("ГЛОБАЛЬНЫЕ НАСТРОЙКИ:");
-        Console.Write($"SSID домашней WiFi [{config.PcWifiSsid}]: ");
+        Console.WriteLine("НАСТРОЙКИ ДОМАШНЕЙ СЕТИ:");
+        Console.Write($"SSID домашней сети [{config.HotspotSsid}]: ");
         string input = Console.ReadLine();
-        if (!string.IsNullOrEmpty(input)) config.PcWifiSsid = input;
+        if (!string.IsNullOrEmpty(input)) config.HotspotSsid = input;
 
-        Console.Write($"Пароль домашней WiFi [***]: ");
+        Console.Write($"Пароль домашней сети [***]: ");
         input = Console.ReadLine();
-        if (!string.IsNullOrEmpty(input)) config.PcWifiPassword = input;
+        if (!string.IsNullOrEmpty(input)) config.HotspotPassword = input;
 
         Console.WriteLine($"\nРЕДАКТИРОВАНИЕ УСТРОЙСТВ (всего: {config.EspDevices.Count}):");
 
@@ -1262,6 +1611,14 @@ class Program
             input = Console.ReadLine();
             if (!string.IsNullOrEmpty(input) && int.TryParse(input, out int port))
                 device.Port = port;
+
+            Console.Write($"  MAC-адрес [{device.MacAddress}]: ");
+            input = Console.ReadLine();
+            if (!string.IsNullOrEmpty(input)) device.MacAddress = input;
+
+            Console.Write($"  IP в домашней сети [{device.HotspotIp}]: ");
+            input = Console.ReadLine();
+            if (!string.IsNullOrEmpty(input)) device.HotspotIp = input;
         }
 
         SaveConfig(config);
@@ -1269,57 +1626,238 @@ class Program
         WaitForKey();
     }
 
-    // ---------- 4. ПОИСК ESP В СЕТИ ----------
-    static void FindEspInHomeNetwork(Config config)
+    // ---------- 4. ПОИСК ESP В ДОМАШНЕЙ СЕТИ ----------
+    static void FindEspInHotspotNetwork(Config config)
     {
         Console.Clear();
         Log("=== ПОИСК ESP В ДОМАШНЕЙ СЕТИ ===", "INFO");
 
-        if (string.IsNullOrEmpty(config.PcWifiSsid))
-        {
-            Log("Сначала настройте домашнюю WiFi", "ERROR");
-            WaitForKey();
-            return;
-        }
-
-        Console.WriteLine($"\nПоиск всех ESP в сети...");
-
-        string[] commonSubnets = { "192.168.1.", "192.168.0.", "192.168.100.", "192.168.137." };
-        int foundCount = 0;
+        Console.WriteLine($"\nПоиск всех ESP в домашней сети {config.HotspotSsid}...");
+        bool foundAny = false;
 
         foreach (var device in config.EspDevices)
         {
-            Log($"\nПоиск {device.Name}...", "INFO");
-            bool found = false;
-
-            foreach (string subnet in commonSubnets)
+            if (FindAndSaveEspInNetwork(device, config))
             {
-                for (int i = 2; i <= 30; i++)
-                {
-                    string testIp = subnet + i;
-                    Console.Write($"\rПроверка {testIp}...");
-
-                    if (CheckEspAvailability(testIp, device.Port, 150))
-                    {
-                        device.HomeIp = testIp;
-                        Log($"Найдена {device.Name}: {testIp}", "SUCCESS", device.Name);
-                        found = true;
-                        foundCount++;
-                        break;
-                    }
-                }
-                if (found) break;
-                Console.WriteLine();
+                foundAny = true;
             }
-            if (!found) Log($"{device.Name} не найдена", "WARN", device.Name);
         }
 
-        if (foundCount > 0)
+        if (foundAny)
         {
             SaveConfig(config);
-            Log($"\nНайдено устройств: {foundCount}. Конфигурация сохранена.", "SUCCESS");
+            Log($"\nПоиск завершен. Конфигурация сохранена.", "SUCCESS");
+        }
+        else
+        {
+            Log($"\nESP не найдены. Проверьте:", "WARN");
+            Console.WriteLine("1. ESP подключены к питанию");
+            Console.WriteLine("2. ESP настроены на подключение к домашней сети (меню 1 или 6)");
+            Console.WriteLine("3. ESP подключены к сети " + config.HotspotSsid);
+            Console.WriteLine("4. Попробуйте перезагрузить ESP кнопкой RESET");
+            Console.WriteLine("\nАльтернативные действия:");
+            Console.WriteLine("- Используйте меню 11 для прямого подключения по IP");
+            Console.WriteLine("- Назначьте IP-адреса вручную через меню 3");
         }
         WaitForKey();
+    }
+
+    // Новый метод для поиска и сохранения ESP в домашней сети
+    static bool FindAndSaveEspInNetwork(EspDeviceConfig device, Config config)
+    {
+        Log($"Поиск {device.Name} в сети...", "INFO", device.Name);
+
+        // СПИСОК ВОЗМОЖНЫХ ПОДСЕТЕЙ ДЛЯ ПОИСКА
+        List<string> possibleSubnets = new List<string>
+    {
+        "192.168.137.",  // Подсеть ваших ESP32
+        "192.168.1.",    // Типичная домашняя подсеть
+        "192.168.0.",    // Другая типичная подсеть
+        "172.17.160.",   // Текущая подсеть компьютера
+        "10.0.0.",       // Еще одна возможная подсеть
+    };
+
+        // 1. Сначала проверяем сохраненный IP (если есть)
+        if (!string.IsNullOrEmpty(device.HotspotIp))
+        {
+            Log($"Проверяю сохраненный IP: {device.HotspotIp}", "INFO", device.Name);
+            if (CheckEspAvailability(device.HotspotIp, device.Port, 500))
+            {
+                Log($"Устройство {device.Name} доступно по сохраненному IP: {device.HotspotIp}", "SUCCESS", device.Name);
+                return true;
+            }
+            else
+            {
+                Log($"Сохраненный IP {device.HotspotIp} не доступен", "WARN", device.Name);
+            }
+        }
+
+        // 2. Поиск по MAC-адресу через ARP
+        if (!string.IsNullOrEmpty(device.MacAddress))
+        {
+            string arpIp = FindIpByMacAddress(device.MacAddress);
+            if (!string.IsNullOrEmpty(arpIp))
+            {
+                Log($"Найден IP по MAC-адресу: {arpIp}", "INFO", device.Name);
+                if (CheckEspAvailability(arpIp, device.Port, 500))
+                {
+                    device.HotspotIp = arpIp;
+                    Log($"Устройство {device.Name} найдено по MAC-адресу: {arpIp}", "SUCCESS", device.Name);
+                    return true;
+                }
+            }
+        }
+
+        // 3. Активное сканирование всех возможных подсетей
+        string foundIp = null;
+
+        foreach (string subnet in possibleSubnets)
+        {
+            Log($"Сканирую подсеть {subnet}...", "INFO", device.Name);
+
+            // Быстрое сканирование только нескольких адресов
+            Parallel.For(1, 255, (i, state) =>
+            {
+                // Проверяем только "интересные" адреса
+                if (i == 102 || i == 173 || i == 1 || i == 100 || i == 50 || i == 200 || i < 10)
+                {
+                    string testIp = subnet + i;
+                    if (CheckEspAvailability(testIp, device.Port, 100)) // Уменьшаем таймаут для скорости
+                    {
+                        foundIp = testIp;
+                        state.Break();
+                    }
+                }
+            });
+
+            if (!string.IsNullOrEmpty(foundIp))
+            {
+                break;
+            }
+        }
+
+        // 4. Если не нашли быстрым способом, делаем полное сканирование
+        if (string.IsNullOrEmpty(foundIp))
+        {
+            Log($"Делаю полное сканирование подсети 192.168.137....", "INFO", device.Name);
+
+            // Специально проверяем ваши известные IP
+            string[] knownIps = { "192.168.137.102", "192.168.137.173", "192.168.137.1", "192.168.137.100" };
+
+            Parallel.ForEach(knownIps, (testIp, state) =>
+            {
+                if (CheckEspAvailability(testIp, device.Port, 500))
+                {
+                    foundIp = testIp;
+                    state.Break();
+                }
+            });
+        }
+
+        if (!string.IsNullOrEmpty(foundIp))
+        {
+            device.HotspotIp = foundIp;
+            Log($"Найдена {device.Name}: {foundIp}", "SUCCESS", device.Name);
+            return true;
+        }
+
+        Log($"{device.Name} не найдена в сети", "WARN", device.Name);
+
+        // Предлагаем ввести IP вручную
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine($"\n{device.Name} не найдена автоматически.");
+        Console.WriteLine($"Известные IP ваших устройств:");
+        Console.WriteLine($"  ESP32_Cos: 192.168.137.102");
+        Console.WriteLine($"  ESP32_Sin: 192.168.137.173");
+        Console.ResetColor();
+
+        Console.Write($"\nВведите IP-адрес для {device.Name} вручную (или Enter чтобы пропустить): ");
+        string manualIp = Console.ReadLine();
+
+        if (!string.IsNullOrEmpty(manualIp))
+        {
+            if (CheckEspAvailability(manualIp, device.Port, 1000))
+            {
+                device.HotspotIp = manualIp;
+                Log($"IP {manualIp} назначен вручную для {device.Name}", "SUCCESS", device.Name);
+                return true;
+            }
+            else
+            {
+                Log($"IP {manualIp} не доступен", "ERROR", device.Name);
+            }
+        }
+
+        return false;
+    }
+
+    // ---------- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ----------
+
+    // Получение текущей подсети
+    static string GetCurrentSubnet()
+    {
+        try
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                {
+                    string ipString = ip.ToString();
+                    int lastDot = ipString.LastIndexOf('.');
+                    if (lastDot > 0)
+                    {
+                        return ipString.Substring(0, lastDot + 1);
+                    }
+                }
+            }
+        }
+        catch { }
+        return "192.168.137."; // Возвращаем подсеть по умолчанию из ваших данных
+    }
+
+    // Поиск IP по MAC-адресу в ARP-таблице
+    static string FindIpByMacAddress(string macAddress)
+    {
+        try
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "arp",
+                    Arguments = "-a",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.GetEncoding(866)
+                }
+            };
+
+            process.Start();
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+
+            string[] lines = output.Split('\n');
+            foreach (string line in lines)
+            {
+                // Нормализуем MAC-адрес для сравнения
+                string normalizedMac = macAddress.Replace(':', '-').ToLower();
+
+                if (line.ToLower().Contains(normalizedMac))
+                {
+                    // Извлекаем IP из строки ARP-таблицы
+                    string[] parts = line.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1)
+                    {
+                        return parts[0];
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return null;
     }
 
     // ---------- 5. ПОКАЗАТЬ КОНФИГУРАЦИЮ ----------
@@ -1327,9 +1865,9 @@ class Program
     {
         Console.Clear();
         Console.WriteLine("=== ТЕКУЩАЯ КОНФИГУРАЦИЯ ===");
-        Console.WriteLine($"\nДомашняя WiFi:");
-        Console.WriteLine($"  SSID: {config.PcWifiSsid}");
-        Console.WriteLine($"  Пароль: {new string('*', config.PcWifiPassword.Length)}");
+        Console.WriteLine($"\nДомашняя сеть:");
+        Console.WriteLine($"  SSID: {config.HotspotSsid}");
+        Console.WriteLine($"  Пароль: {new string('*', config.HotspotPassword.Length)}");
 
         Console.WriteLine($"\nУстройств: {config.EspDevices.Count}");
         foreach (var device in config.EspDevices)
@@ -1338,7 +1876,25 @@ class Program
             Console.WriteLine($"  Сеть AP: {device.ApSsid}");
             Console.WriteLine($"  Пароль AP: {new string('*', device.ApPassword.Length)}");
             Console.WriteLine($"  IP (AP): {device.ApIp}:{device.Port}");
-            Console.WriteLine($"  IP (домашняя): {device.HomeIp ?? "не найден"}");
+            Console.WriteLine($"  MAC-адрес: {device.MacAddress}");
+            Console.WriteLine($"  IP (домашняя сеть): {device.HotspotIp ?? "не найден"}");
+
+            if (!string.IsNullOrEmpty(device.HotspotIp))
+            {
+                Console.Write($"  Статус: ");
+                if (CheckEspAvailability(device.HotspotIp, device.Port, 500))
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("✓ Доступен");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("✗ Недоступен");
+                    Console.ResetColor();
+                }
+            }
         }
 
         Console.WriteLine($"\nАктивных стримов: {_activeWorkers.Count}");
@@ -1355,55 +1911,6 @@ class Program
         WaitForKey();
     }
 
-    // ---------- 11. ТЕСТИРОВАНИЕ КОМАНД ----------
-    static void TestAllCommands(Config config)
-    {
-        Console.Clear();
-        Log("=== ТЕСТИРОВАНИЕ КОМАНД ESP ===", "INFO");
-
-        if (config.EspDevices.Count == 0)
-        {
-            Log("Нет устройств для тестирования.", "ERROR");
-            WaitForKey();
-            return;
-        }
-
-        Console.WriteLine("\nВыберите устройство для тестирования:");
-        for (int i = 0; i < config.EspDevices.Count; i++)
-        {
-            Console.WriteLine($"{i + 1}. {config.EspDevices[i].Name}");
-        }
-        Console.Write($"\nВаш выбор (1-{config.EspDevices.Count}): ");
-
-        if (!int.TryParse(Console.ReadLine(), out int choice) || choice < 1 || choice > config.EspDevices.Count)
-        {
-            Log("Неверный выбор.", "ERROR");
-            return;
-        }
-
-        var device = config.EspDevices[choice - 1];
-
-        // Останавливаем все активные стримы перед тестированием
-        StopAllActiveStreams();
-
-        string espIp = SafelyConnectToEsp(device, config, "ТЕСТИРОВАНИЕ");
-        if (string.IsNullOrEmpty(espIp)) return;
-
-        string[] testCommands = { "STATUS", "CLEAR", "START_STREAM" };
-        foreach (var cmd in testCommands)
-        {
-            Console.Write($"\nТест команды '{cmd}' (Enter для пропуска): ");
-            if (Console.ReadLine() == "")
-            {
-                string response = SendCommandToEsp(espIp, device.Port, cmd);
-                Console.WriteLine($"Ответ: {response}");
-                Thread.Sleep(1000);
-            }
-        }
-        WaitForKey();
-    }
-
-    // ---------- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ----------
     static void WaitForKey(string message = "Нажмите любую клавишу для продолжения...")
     {
         Console.WriteLine($"\n{message}");
@@ -1427,6 +1934,16 @@ class Program
         Console.WriteLine("  • Если ESP уже стримит, она не ответит на другие команды");
         Console.WriteLine("  • Перед любой операцией останавливайте активные стримы (меню 8)");
         Console.WriteLine("  • Если ESP не отвечает, перезагрузите ее кнопкой RESET");
+        Console.WriteLine("\nРАБОТА ЧЕРЕЗ ДОМАШНЮЮ СЕТЬ:");
+        Console.WriteLine("  1. Компьютер должен быть подключен к домашней сети");
+        Console.WriteLine("  2. Настройте ESP на подключение к домашней сети (меню 1 или 6)");
+        Console.WriteLine("  3. Найдите ESP в домашней сети (меню 4)");
+        Console.WriteLine("  4. Запускайте параллельный стриминг (меню 7)");
+        Console.WriteLine("\nВАЖНО:");
+        Console.WriteLine("  • В конфиг уже добавлены IP-адреса ваших ESP:");
+        Console.WriteLine("    - ESP32_Cos: 192.168.137.102");
+        Console.WriteLine("    - ESP32_Sin: 192.168.137.173");
+        Console.WriteLine("  • Для прямого подключения используйте меню 11");
         WaitForKey();
     }
 
@@ -1434,10 +1951,23 @@ class Program
     static void Main()
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        Console.Title = "ESP32 Dual Stream Manager - Параллельный стриминг";
+        Console.Title = "ESP32 Dual Stream Manager - Работа через домашнюю сеть";
         Console.OutputEncoding = Encoding.UTF8;
 
         Config config = LoadConfig();
+
+        // Проверяем доступность ESP при старте
+        Log("=== ПРОВЕРКА ДОСТУПНОСТИ ESP ПРИ СТАРТЕ ===", "INFO");
+        foreach (var device in config.EspDevices)
+        {
+            if (!string.IsNullOrEmpty(device.HotspotIp))
+            {
+                bool isAvailable = CheckEspAvailability(device.HotspotIp, device.Port, 1000);
+                Log($"{device.Name} ({device.HotspotIp}): {(isAvailable ? "✓ Доступна" : "✗ Недоступна")}",
+                    isAvailable ? "SUCCESS" : "WARN");
+            }
+        }
+        Thread.Sleep(2000);
 
         bool running = true;
         while (running)
@@ -1451,18 +1981,19 @@ class Program
                 case "1": ConfigureSingleEsp(config); break;
                 case "2": StreamFromSingleEsp(config); break;
                 case "3": EditConfiguration(config); break;
-                case "4": FindEspInHomeNetwork(config); break;
+                case "4": FindEspInHotspotNetwork(config); break;
                 case "5": ShowCurrentConfig(config); break;
                 case "6": ConfigureTwoEspParallel(config); break;
                 case "7": StreamFromTwoEspParallel(config); break;
                 case "8": StopAllStreamsMenu(); break;
                 case "9": CheckEspAvailabilityMenu(config); break;
-                case "10":
+                case "10": DiagnoseWifi(config); break;
+                case "11": DirectConnectToEsp(config); break;
+                case "12":
                     StopAllActiveStreams();
                     running = false;
                     Log("Выход...", "INFO");
                     break;
-                case "11": TestAllCommands(config); break;
                 case "h": ShowHelp(); break;
                 default: Log("Неверный выбор. Нажмите 'h' для помощи.", "WARN"); WaitForKey(); break;
             }
