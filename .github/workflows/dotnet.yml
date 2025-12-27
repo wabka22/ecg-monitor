@@ -1,10 +1,14 @@
-name: .NET Build
+name: .NET Windows Build
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest  # Важно: используем Windows
     
     steps:
     - uses: actions/checkout@v4
@@ -12,16 +16,22 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0'
+        dotnet-version: '8.0.x'
     
-    - name: Build with auto-discovery
-      run: |
-        echo "Looking for .NET projects..."
-        find . -name "*.csproj" -type f
-        
-        for proj in $(find . -name "*.csproj" -type f); do
-          echo "Building: $proj"
-          dotnet restore "$proj"
-          dotnet build "$proj" --configuration Release
-          break  # Собираем только первый проект
-        done
+    - name: Restore dependencies
+      working-directory: ./WIFI_PC/WIFI_PC
+      run: dotnet restore
+    
+    - name: Build
+      working-directory: ./WIFI_PC/WIFI_PC
+      run: dotnet build --configuration Release --no-restore
+    
+    - name: Publish
+      working-directory: ./WIFI_PC/WIFI_PC
+      run: dotnet publish --configuration Release --output ./publish --no-build
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WIFI_PC-Windows
+        path: ./WIFI_PC/WIFI_PC/publish/
