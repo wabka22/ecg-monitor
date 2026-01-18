@@ -1,6 +1,4 @@
-﻿using System;
-using System.Windows.Forms;
-
+﻿
 namespace ESP32StreamManager
 {
     public class SimpleNetworkDialog : Form

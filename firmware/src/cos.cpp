@@ -15,26 +15,22 @@
 // String savedSSID = "";
 // String savedPass = "";
 
-// // -------------------- Косинус --------------------
 // float cosineTime = 0.0;
 // const float SAMPLE_RATE = 100.0;
 // const float FREQUENCY = 1.0;
-// const float AMPLITUDE = 100.0;
-// const float OFFSET = AMPLITUDE;
 // unsigned long lastSampleTime = 0;
 // const unsigned long SAMPLE_INTERVAL = (unsigned long)(1000.0 / SAMPLE_RATE);
 
 // WiFiClient activeClient;
 
-// // -------------------- LED Индикация --------------------
-// const int LED_PIN = 2; // Встроенный светодиод на ESP32
+// const int LED_PIN = 2;
 
 // enum LEDState {
 //   LED_OFF = 0,
 //   LED_ON = 1,
-//   LED_SLOW_BLINK = 2,     // Медленное мигание (1 раз в секунду)
-//   LED_FAST_BLINK = 3,     // Быстрое мигание (5 раз в секунду)
-//   LED_VERY_FAST_BLINK = 4 // Очень быстрое мигание (10 раз в секунду)
+//   LED_SLOW_BLINK = 2,
+//   LED_FAST_BLINK = 3,
+//   LED_VERY_FAST_BLINK = 4
 // };
 
 // LEDState currentLedState = LED_SLOW_BLINK;
@@ -49,18 +45,15 @@
 // void updateLED();
 // void setLEDState(LEDState state);
 
-// // -------------------- SETUP ------------------------
 // void setup() {
 //   Serial.begin(115200);
-//   delay(1000); // Даем время для стабилизации
+//   delay(1000);
   
-//   // Настраиваем светодиод
 //   pinMode(LED_PIN, OUTPUT);
 //   digitalWrite(LED_PIN, LOW);
   
 //   Serial.println("\n\n=== ESP32 WiFi AP Setup ===");
   
-//   // Инициализируем Preferences
 //   if (!prefs.begin("wifi", false)) {
 //     Serial.println("ERROR: Failed to initialize Preferences!");
 //     setLEDState(LED_VERY_FAST_BLINK);
@@ -68,8 +61,6 @@
 //     Serial.println("Preferences initialized OK");
 //   }
   
-//   // НЕ читаем сохраненные данные при запуске!
-//   // Просто запускаем точку доступа
 //   WiFi.mode(WIFI_AP);
 //   Serial.println("Setting up AP mode...");
   
@@ -79,20 +70,16 @@
 //   } else {
 //     Serial.print("AP IP: ");
 //     Serial.println(WiFi.softAPIP());
-//     setLEDState(LED_SLOW_BLINK); // AP режим - медленное мигание
+//     setLEDState(LED_SLOW_BLINK);
 //   }
   
 //   server.begin();
 //   Serial.println("TCP server started on port 8888");
 //   Serial.println("Ready for commands...");
-//   Serial.println("Connect to AP: ESP32_Cos_Streamer, password: 12345678");
-//   Serial.println("Then send commands via TCP to AP IP");
 // }
 
-// // -------------------- WiFi connect ------------------------
 // void connectToWiFi() {
 //   if (savedSSID == "" || isConnecting) {
-//     Serial.println("connectToWiFi: skipped - no SSID or already connecting");
 //     return;
 //   }
 
@@ -100,16 +87,13 @@
 //   Serial.printf("Attempting to connect to: %s\n", savedSSID.c_str());
 //   setLEDState(LED_FAST_BLINK);
   
-//   // Включаем STA режим (добавляем к существующему AP)
 //   WiFi.mode(WIFI_AP_STA);
-  
 //   WiFi.begin(savedSSID.c_str(), savedPass.c_str());
 //   lastConnectionAttempt = millis();
   
 //   Serial.println("WiFi.begin() called");
 // }
 
-// // -------------------- WiFi reconnect handler ------------------------
 // void handleWiFiReconnection() {
 //   static unsigned long lastCheck = 0;
   
@@ -118,22 +102,19 @@
   
 //   wl_status_t status = WiFi.status();
   
-//   // Если мы в процессе подключения
 //   if (isConnecting) {
 //     if (status == WL_CONNECTED) {
 //       Serial.println("WiFi Connected!");
 //       Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
 //       isConnecting = false;
-//       setLEDState(LED_ON); // Подключено - светодиод постоянно горит
+//       setLEDState(LED_ON);
 //     } 
 //     else if (millis() - lastConnectionAttempt > 15000) {
 //       Serial.printf("Connection failed. Status: %d\n", status);
 //       isConnecting = false;
-//       setLEDState(LED_SLOW_BLINK); // Не удалось подключиться - медленное мигание AP
+//       setLEDState(LED_SLOW_BLINK);
 //     }
 //   }
-  
-//   // Авто-реконнект
 //   else if (status != WL_CONNECTED) {
 //     if (savedSSID != "" && millis() - lastConnectionAttempt >= CONNECTION_RETRY_INTERVAL) {
 //       Serial.println("Attempting reconnection...");
@@ -142,7 +123,6 @@
 //   }
 // }
 
-// // -------------------- LED Control ------------------------
 // void setLEDState(LEDState state) {
 //   currentLedState = state;
 //   lastLedToggle = millis();
@@ -196,7 +176,6 @@
 //   }
 // }
 
-// // -------------------- STATUS ------------------------
 // void printNetworkStatus(WiFiClient& client) {
 //   client.println("=== ESP32 Network Status ===");
 //   client.print("AP IP: "); client.println(WiFi.softAPIP());
@@ -232,7 +211,6 @@
 //   client.println("=============================");
 // }
 
-// // -------------------- STREAMING ------------------------
 // void streamCosineWaveTick() {
 //   if (!activeClient.connected()) {
 //     Serial.println("Stream client disconnected");
@@ -258,15 +236,15 @@
 //   if (now - lastSampleTime < SAMPLE_INTERVAL) return;
 //   lastSampleTime = now;
 
-//   float value = AMPLITUDE * cos(2 * PI * FREQUENCY * cosineTime) + OFFSET;
+//   float normalizedValue = cos(2 * PI * FREQUENCY * cosineTime);
 //   cosineTime += 1.0 / SAMPLE_RATE;
 //   if (cosineTime > 100000) cosineTime = 0;
 
-//   activeClient.println(String(value, 2));
+//   activeClient.println(String(normalizedValue, 3));
+  
 //   yield();
 // }
 
-// // -------------------- MAIN LOOP ------------------------
 // void loop() {
 //   handleWiFiReconnection();
 //   updateLED();
@@ -286,7 +264,6 @@
 //   command.trim();
 //   Serial.printf("Received command: %s\n", command.c_str());
 
-//   // =================== SET SSID/PASS ===================
 //   if (command == "SET") {
 //     String ssid = client.readStringUntil('\n');
 //     String pass = client.readStringUntil('\n');
@@ -296,7 +273,6 @@
 //     Serial.printf("SET command - SSID: '%s', PASS: '%s'\n", ssid.c_str(), pass.c_str());
 
 //     if (ssid.length() > 0 && pass.length() > 0) {
-//       // Сохраняем в NVS
 //       if (prefs.putString("ssid", ssid) && prefs.putString("pass", pass)) {
 //         Serial.println("Credentials saved to NVS");
 //         savedSSID = ssid;
@@ -307,7 +283,6 @@
 //         delay(100);
 //         client.stop();
         
-//         // Пытаемся подключиться
 //         Serial.println("Attempting to connect with new credentials...");
 //         setLEDState(LED_FAST_BLINK);
 //         connectToWiFi();
@@ -327,7 +302,6 @@
 //     return;
 //   }
 
-//   // =================== STATUS ===================
 //   else if (command == "STATUS") {
 //     printNetworkStatus(client);
 //     client.flush();
@@ -336,9 +310,8 @@
 //     return;
 //   }
 
-//   // =================== START_STREAM ===================
 //   else if (command == "START_STREAM") {
-//     Serial.println("Starting stream");
+//     Serial.println("Starting cosine wave stream");
 //     client.println("OK");
 //     client.flush();
 //     isStreaming = true;
@@ -349,7 +322,6 @@
 //     return;
 //   }
 
-//   // =================== CLEAR ===================
 //   else if (command == "CLEAR") {
 //     Serial.println("Clearing WiFi credentials");
 //     prefs.remove("ssid");
@@ -357,7 +329,7 @@
 //     savedSSID = "";
 //     savedPass = "";
 //     WiFi.disconnect(true);
-//     WiFi.mode(WIFI_AP); // Возвращаемся только в AP режим
+//     WiFi.mode(WIFI_AP);
 //     client.println("OK: Credentials cleared");
 //     client.flush();
 //     delay(50);
@@ -366,7 +338,6 @@
 //     return;
 //   }
 
-//   // =================== UNKNOWN ===================
 //   else {
 //     Serial.printf("Unknown command: %s\n", command.c_str());
 //     client.println("ERROR: Unknown command");

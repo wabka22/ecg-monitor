@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest  # Важно: используем Windows
+    runs-on: windows-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -29,6 +29,11 @@ jobs:
     - name: Publish
       working-directory: ./WIFI_PC/WIFI_PC
       run: dotnet publish --configuration Release --output ./publish --no-build
+    
+    - name: Run application (test)
+      working-directory: ./WIFI_PC/WIFI_PC/publish
+      run: .\WIFI_PC.exe
+      continue-on-error: true
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4

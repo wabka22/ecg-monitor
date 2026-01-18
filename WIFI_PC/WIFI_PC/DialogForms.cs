@@ -1,18 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text.Json;
-using System.Windows.Forms;
+﻿using System.Text.Json;
 
 namespace ESP32StreamManager
 {
     public class DeviceSelectionDialog : Form
     {
         public EspDeviceConfig SelectedDevice { get; private set; }
-        private List<EspDeviceConfig> devices;
 
         public DeviceSelectionDialog(List<EspDeviceConfig> devices, string title)
         {
-            this.devices = devices;
             this.Text = title;
             this.Size = new Size(400, 200);
             this.StartPosition = FormStartPosition.CenterParent;

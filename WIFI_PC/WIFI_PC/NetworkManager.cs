@@ -1,9 +1,6 @@
-﻿using System;
-using System.Diagnostics;
-using System.IO;
+﻿using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
 
 namespace ESP32StreamManager
 {
@@ -16,7 +13,6 @@ namespace ESP32StreamManager
             _mainForm = mainForm;
         }
 
-        // Логирование через MainForm
         private void Log(string msg, string level = "INFO", string deviceTag = "")
         {
             _mainForm.Log(msg, level, deviceTag);
@@ -104,13 +100,11 @@ namespace ESP32StreamManager
                 string output = process.StandardOutput.ReadToEnd();
                 process.WaitForExit();
 
-                // Проверяем несколько вариантов
                 if (output.Contains($" {networkName} ") ||
                     output.Contains($": {networkName}") ||
                     output.Contains($"SSID : {networkName}") ||
                     output.Contains($"SSID : {networkName}"))
                 {
-                    // Проверяем статус подключения
                     string[] connectedMarkers = { "State : connected", "Состояние : подключено",
                                                   "State             : connected", "Состояние         : подключено" };
                     foreach (string marker in connectedMarkers)
@@ -121,16 +115,13 @@ namespace ESP32StreamManager
                         }
                     }
 
-                    // Если нашли сеть, но нет явного статуса, проверяем контекст
                     int ssidIndex = output.IndexOf(networkName, StringComparison.OrdinalIgnoreCase);
                     if (ssidIndex >= 0)
                     {
-                        // Берем 200 символов вокруг найденного SSID
                         int start = Math.Max(0, ssidIndex - 100);
                         int length = Math.Min(200, output.Length - start);
                         string context = output.Substring(start, length);
 
-                        // Ищем маркеры подключения в контексте
                         string[] contextMarkers = { "connected", "подключено", "authenticated", "аутентифицирован" };
                         foreach (string marker in contextMarkers)
                         {
@@ -196,11 +187,9 @@ namespace ESP32StreamManager
 
             try
             {
-                // Отключаемся от текущей сети
                 RunNetshCommand("wlan disconnect", false);
                 Thread.Sleep(2000);
 
-                // Создаем XML профиль для WiFi сети
                 string profileXml = $@"<?xml version=""1.0""?>
 <WLANProfile xmlns=""http://www.microsoft.com/networking/WLAN/profile/v1"">
     <name>{networkName}</name>
@@ -227,15 +216,12 @@ namespace ESP32StreamManager
     </MSM>
 </WLANProfile>";
 
-                // Сохраняем профиль во временный файл
                 string tempFile = Path.Combine(Path.GetTempPath(), $"wifi_{Guid.NewGuid().ToString("N").Substring(0, 8)}.xml");
                 File.WriteAllText(tempFile, profileXml, Encoding.UTF8);
 
-                // Удаляем старый профиль если есть
                 RunNetshCommand($"wlan delete profile name=\"{networkName}\"", false);
                 Thread.Sleep(500);
 
-                // Добавляем новый профиль
                 string addResult = RunNetshCommand($"wlan add profile filename=\"{tempFile}\"");
                 if (addResult.Contains("added") || addResult.Contains("добавлен"))
                 {
@@ -246,7 +232,6 @@ namespace ESP32StreamManager
                     Log($"Ошибка добавления профиля: {addResult}", "WARN");
                 }
 
-                // Подключаемся к сети
                 Log($"Подключаюсь к сети {networkName}...", "INFO");
                 string connectResult = RunNetshCommand($"wlan connect name=\"{networkName}\"");
 
@@ -260,15 +245,13 @@ namespace ESP32StreamManager
                     Log($"Результат подключения: {connectResult}", "WARN");
                 }
 
-                // Удаляем временный файл
                 try { File.Delete(tempFile); } catch { }
 
-                // Ждем подключения с 3 попытками
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
                     Log($"Попытка подключения {attempt}/3...", "INFO");
 
-                    for (int i = 0; i < 15; i++) // Ждем до 15 секунд за попытку
+                    for (int i = 0; i < 15; i++)
                     {
                         Thread.Sleep(1000);
                         if (IsConnectedToNetwork(networkName))
@@ -278,7 +261,7 @@ namespace ESP32StreamManager
                             return true;
                         }
 
-                        if (i % 5 == 0) // Каждые 5 секунд показываем прогресс
+                        if (i % 5 == 0)
                         {
                             Log($"Ожидание подключения... {i + 1}/15 секунд", "INFO");
                         }
@@ -293,7 +276,6 @@ namespace ESP32StreamManager
 
                 Log("Не удалось подключиться к сети ESP", "ERROR");
 
-                // Показываем доступные сети для диагностики
                 Log("Доступные сети WiFi:", "INFO");
                 string networks = RunNetshCommand("wlan show networks");
                 Log(networks, "DIAG");
@@ -314,7 +296,6 @@ namespace ESP32StreamManager
             {
                 Log($"Пытаемся подключиться к {networkName}...", "INFO");
 
-                // Пробуем просто подключиться через стандартную команду
                 string result = RunNetshCommand($"wlan connect name=\"{networkName}\" ssid=\"{networkName}\" key=\"{password}\"");
 
                 if (result.Contains("successfully") || result.Contains("успешно") ||
@@ -322,7 +303,6 @@ namespace ESP32StreamManager
                 {
                     Log($"Запрос на подключение отправлен", "SUCCESS");
 
-                    // Ждем подключения
                     for (int i = 0; i < 10; i++)
                     {
                         Thread.Sleep(1000);
@@ -390,7 +370,6 @@ namespace ESP32StreamManager
             {
                 Log("Пинг устройств в сети...", "INFO");
 
-                // Пинг стандартных адресов ESP
                 string[] ipsToPing = {
                     "192.168.137.102", "192.168.137.173",
                     "192.168.137.1", "192.168.137.100",
@@ -456,12 +435,10 @@ namespace ESP32StreamManager
                 string[] lines = output.Split('\n');
                 foreach (string line in lines)
                 {
-                    // Нормализуем MAC-адрес для сравнения
                     string normalizedMac = macAddress.Replace(':', '-').ToLower();
 
                     if (line.ToLower().Contains(normalizedMac))
                     {
-                        // Извлекаем IP из строки ARP-таблицы
                         string[] parts = line.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
                         if (parts.Length >= 1)
                         {

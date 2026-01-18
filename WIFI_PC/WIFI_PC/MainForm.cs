@@ -1,15 +1,6 @@
-﻿using System;
-using System.IO;
-using System.Text.Json;
-using System.Diagnostics;
+﻿using System.Text.Json;
 using System.Net.Sockets;
-using System.Threading;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
 using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 using OxyPlot;
 using OxyPlot.Series;
 using OxyPlot.Axes;
@@ -24,7 +15,6 @@ namespace ESP32StreamManager
         private Config _config;
         private NetworkManager _networkManager;
 
-        // UI Controls
         private Panel panelTop;
         private Panel panelCenter;
         private Panel panelBottom;
@@ -46,7 +36,6 @@ namespace ESP32StreamManager
         private RichTextBox txtLog;
         private Panel controlPanel;
 
-        // Data for plotting
         private List<DataPoint> sinData = new List<DataPoint>();
         private List<DataPoint> cosData = new List<DataPoint>();
         private const int MaxDataPoints = 500;
@@ -70,96 +59,80 @@ namespace ESP32StreamManager
         private void InitializeComponent()
         {
             this.Text = "ESP32 Dual Stream Manager";
-            this.Size = new System.Drawing.Size(1400, 1000); // Увеличили высоту окна
+            this.Size = new System.Drawing.Size(1400, 1000);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(30, 30, 30);
+            this.BackColor = Color.FromArgb(28, 29, 33);
 
-            // Top Panel - Status
             panelTop = new Panel();
             panelTop.Dock = DockStyle.Top;
-            panelTop.Height = 100;
-            panelTop.BackColor = Color.FromArgb(45, 45, 48);
+            panelTop.Height = 90;
+            panelTop.BackColor = Color.FromArgb(40, 42, 46);
 
             lblStatus = new Label();
             lblStatus.ForeColor = Color.White;
-            lblStatus.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+            lblStatus.Font = new Font("Segoe UI", 11, FontStyle.Bold);
             lblStatus.Text = "Статус: Готов к работе";
-            lblStatus.Location = new Point(20, 15);
+            lblStatus.Location = new Point(20, 12);
             lblStatus.Size = new Size(500, 25);
 
             lblSinStatus = new Label();
-            lblSinStatus.ForeColor = Color.LightGreen;
+            lblSinStatus.ForeColor = Color.MediumAquamarine;
             lblSinStatus.Font = new Font("Segoe UI", 9);
             lblSinStatus.Text = "ESP32_Sin: Отключено";
-            lblSinStatus.Location = new Point(20, 45);
-            lblSinStatus.Size = new Size(400, 20);
+            lblSinStatus.Location = new Point(20, 40);
 
             lblCosStatus = new Label();
-            lblCosStatus.ForeColor = Color.LightGreen;
+            lblCosStatus.ForeColor = Color.MediumAquamarine;
             lblCosStatus.Font = new Font("Segoe UI", 9);
             lblCosStatus.Text = "ESP32_Cos: Отключено";
-            lblCosStatus.Location = new Point(20, 65);
-            lblCosStatus.Size = new Size(400, 20);
+            lblCosStatus.Location = new Point(20, 60);
 
-            panelTop.Controls.Add(lblStatus);
-            panelTop.Controls.Add(lblSinStatus);
-            panelTop.Controls.Add(lblCosStatus);
+            panelTop.Controls.AddRange(new Control[] { lblStatus, lblSinStatus, lblCosStatus });
 
-            // Center Panel - Plots
             panelCenter = new Panel();
             panelCenter.Dock = DockStyle.Fill;
-            panelCenter.BackColor = Color.FromArgb(25, 25, 25);
+            panelCenter.BackColor = Color.FromArgb(32, 34, 38);
             panelCenter.Padding = new Padding(10);
 
-            // Используем TableLayoutPanel для одинаковых графиков
             TableLayoutPanel tableLayout = new TableLayoutPanel();
             tableLayout.Dock = DockStyle.Fill;
             tableLayout.RowCount = 2;
             tableLayout.ColumnCount = 1;
             tableLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
             tableLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            tableLayout.Padding = new Padding(0);
 
-            // Sin Plot
             plotSin = new PlotView();
             plotSin.Dock = DockStyle.Fill;
-            plotSin.BackColor = Color.FromArgb(40, 40, 40);
-            plotSin.Margin = new Padding(0, 0, 0, 5);
+            plotSin.BackColor = Color.FromArgb(44, 46, 52);
 
-            // Cos Plot
             plotCos = new PlotView();
             plotCos.Dock = DockStyle.Fill;
-            plotCos.BackColor = Color.FromArgb(40, 40, 40);
-            plotCos.Margin = new Padding(0, 5, 0, 0);
+            plotCos.BackColor = Color.FromArgb(44, 46, 52);
 
-            // Добавляем графики в TableLayoutPanel
             tableLayout.Controls.Add(plotSin, 0, 0);
             tableLayout.Controls.Add(plotCos, 0, 1);
-
             panelCenter.Controls.Add(tableLayout);
 
-            // Bottom Panel - Controls and Log
             panelBottom = new Panel();
             panelBottom.Dock = DockStyle.Bottom;
             panelBottom.Height = 350;
-            panelBottom.BackColor = Color.FromArgb(37, 37, 38);
-            panelBottom.Padding = new Padding(0);
+            panelBottom.BackColor = Color.FromArgb(36, 38, 42);
 
-            // Control buttons panel
             controlPanel = new Panel();
             controlPanel.Dock = DockStyle.Left;
             controlPanel.Width = 320;
-            controlPanel.BackColor = Color.FromArgb(55, 55, 58);
+            controlPanel.BackColor = Color.FromArgb(48, 50, 55);
             controlPanel.Padding = new Padding(10);
             controlPanel.AutoScroll = true;
 
-            // Single operations
-            Label lblSingle = new Label();
-            lblSingle.Text = "ОДИНОЧНЫЕ ОПЕРАЦИИ";
-            lblSingle.ForeColor = Color.Cyan;
-            lblSingle.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            lblSingle.Location = new Point(10, 10);
-            lblSingle.Size = new Size(280, 20);
+            Label lblSingle = new Label()
+            {
+                Text = "ОДИНОЧНЫЕ ОПЕРАЦИИ",
+                ForeColor = Color.MediumTurquoise,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Location = new Point(10, 10),
+                Size = new Size(280, 20)
+            };
 
             btnConnectSingle = CreateButton("Настроить ESP", 10, 40);
             btnConnectSingle.Click += (s, e) => ConfigureSingleEsp();
@@ -169,18 +142,18 @@ namespace ESP32StreamManager
 
             btnStopSingle = CreateButton("Остановить стриминг", 10, 110);
             btnStopSingle.Click += (s, e) => StopSingleStream();
-            btnStopSingle.BackColor = Color.FromArgb(80, 0, 0);
+            btnStopSingle.BackColor = Color.FromArgb(90, 0, 0);
 
             btnFindESP = CreateButton("Найти ESP в сети", 10, 145);
             btnFindESP.Click += (s, e) => FindEspInHotspotNetwork();
 
-            // Parallel operations
-            Label lblParallel = new Label();
-            lblParallel.Text = "ПАРАЛЛЕЛЬНЫЕ ОПЕРАЦИИ";
-            lblParallel.ForeColor = Color.Cyan;
-            lblParallel.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            lblParallel.Location = new Point(10, 185);
-            lblParallel.Size = new Size(280, 20);
+            Label lblParallel = new Label()
+            {
+                Text = "ПАРАЛЛЕЛЬНЫЕ ОПЕРАЦИИ",
+                ForeColor = Color.MediumTurquoise,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Location = new Point(10, 185)
+            };
 
             btnParallelConfig = CreateButton("Настройка двух ESP", 10, 215);
             btnParallelConfig.Click += (s, e) => ConfigureTwoEspParallel();
@@ -188,13 +161,13 @@ namespace ESP32StreamManager
             btnParallelStream = CreateButton("Параллельный стриминг", 10, 250);
             btnParallelStream.Click += (s, e) => StreamFromTwoEspParallel();
 
-            // Utility buttons
-            Label lblUtility = new Label();
-            lblUtility.Text = "УТИЛИТЫ";
-            lblUtility.ForeColor = Color.Cyan;
-            lblUtility.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-            lblUtility.Location = new Point(10, 290);
-            lblUtility.Size = new Size(280, 20);
+            Label lblUtility = new Label()
+            {
+                Text = "УТИЛИТЫ",
+                ForeColor = Color.MediumTurquoise,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Location = new Point(10, 290)
+            };
 
             btnStopAll = CreateButton("Остановить все стримы", 10, 320);
             btnStopAll.Click += (s, e) => StopAllStreamsMenu();
@@ -203,13 +176,17 @@ namespace ESP32StreamManager
             btnClearPlots.Click += (s, e) => ClearPlots();
             btnClearPlots.BackColor = Color.FromArgb(80, 80, 0);
 
-            controlPanel.Controls.AddRange(new Control[] {
-                lblSingle, btnConnectSingle, btnStreamSingle, btnStopSingle, btnFindESP,
-                lblParallel, btnParallelConfig, btnParallelStream,
-                lblUtility, btnStopAll, btnClearPlots, btnDiagnose, btnExit
-            });
 
-            // Log panel
+            btnExit = CreateButton("Выход", 10, 425);
+            btnExit.BackColor = Color.FromArgb(80, 0, 0);
+            btnExit.Click += (s, e) => Close();
+
+            controlPanel.Controls.AddRange(new Control[] {
+        lblSingle, btnConnectSingle, btnStreamSingle, btnStopSingle, btnFindESP,
+        lblParallel, btnParallelConfig, btnParallelStream,
+        lblUtility, btnStopAll, btnClearPlots, btnDiagnose, btnExit
+    });
+
             Panel logPanel = new Panel();
             logPanel.Dock = DockStyle.Fill;
             logPanel.Padding = new Padding(5);
@@ -217,10 +194,9 @@ namespace ESP32StreamManager
             txtLog = new RichTextBox();
             txtLog.Multiline = true;
             txtLog.Dock = DockStyle.Fill;
-            txtLog.BackColor = Color.FromArgb(30, 30, 30);
+            txtLog.BackColor = Color.FromArgb(30, 31, 34);
             txtLog.ForeColor = Color.White;
             txtLog.Font = new Font("Consolas", 9);
-            txtLog.ScrollBars = RichTextBoxScrollBars.Vertical;
             txtLog.ReadOnly = true;
 
             logPanel.Controls.Add(txtLog);
@@ -228,14 +204,13 @@ namespace ESP32StreamManager
             panelBottom.Controls.Add(logPanel);
             panelBottom.Controls.Add(controlPanel);
 
-            // Add all panels to form
-            this.Controls.Add(panelCenter);
-            this.Controls.Add(panelBottom);
-            this.Controls.Add(panelTop);
+            Controls.Add(panelCenter);
+            Controls.Add(panelBottom);
+            Controls.Add(panelTop);
 
-            // Подписываемся на событие Load
-            this.Load += MainForm_Load;
+            Load += MainForm_Load;
         }
+
 
         private void MainForm_Load(object sender, EventArgs e)
         {
@@ -243,7 +218,6 @@ namespace ESP32StreamManager
             _networkManager = new NetworkManager(this);
             _plotStartTime = DateTime.Now;
 
-            // Выводим накопленные логи
             if (_pendingLogs.Count > 0)
             {
                 foreach (var log in _pendingLogs)
@@ -255,7 +229,6 @@ namespace ESP32StreamManager
 
             UpdateUI();
 
-            // Проверяем доступность ESP при старте
             Task.Run(() => CheckEspOnStartup());
         }
 
@@ -290,7 +263,6 @@ namespace ESP32StreamManager
 
         private void SetupPlots()
         {
-            // Setup Sin Plot
             var sinModel = new PlotModel
             {
                 Title = "ESP32_Sin - Синусоидальный сигнал",
@@ -336,7 +308,6 @@ namespace ESP32StreamManager
             sinModel.Series.Add(sinSeries);
             plotSin.Model = sinModel;
 
-            // Setup Cos Plot
             var cosModel = new PlotModel
             {
                 Title = "ESP32_Cos - Косинусоидальный сигнал",
@@ -414,7 +385,6 @@ namespace ESP32StreamManager
                 lblCosStatus.ForeColor = isStreaming ? Color.Yellow : (hasIP ? Color.LightGreen : Color.LightGray);
             }
 
-            // Update plot titles if streaming
             if (plotSin.Model != null)
             {
                 bool sinStreaming = _activeWorkers.Any(w => w.Device.Name.Contains("Sin"));
@@ -453,7 +423,6 @@ namespace ESP32StreamManager
 
             if (!_isFormLoaded)
             {
-                // Сохраняем логи до загрузки формы
                 _pendingLogs.Add(logMsg);
                 return;
             }
@@ -467,7 +436,6 @@ namespace ESP32StreamManager
                 AddLogToTextBox(logMsg, color);
             }
 
-            // Also update UI status for important messages
             if (level == "ERROR" || level == "SUCCESS")
             {
                 UpdateUI();
@@ -664,51 +632,83 @@ namespace ESP32StreamManager
             }
         }
 
-        // ============= PLOTTING METHODS =============
+        private Dictionary<string, Queue<double>> _dataFilters = new Dictionary<string, Queue<double>>();
+        private const int FILTER_WINDOW_SIZE = 5;
+
+        private double ApplyFilter(string deviceName, double value)
+        {
+            if (!_dataFilters.ContainsKey(deviceName))
+            {
+                _dataFilters[deviceName] = new Queue<double>();
+            }
+
+            var filterQueue = _dataFilters[deviceName];
+
+            filterQueue.Enqueue(value);
+
+            if (filterQueue.Count > FILTER_WINDOW_SIZE)
+            {
+                filterQueue.Dequeue();
+            }
+
+            if (filterQueue.Count < 3)
+            {
+                return value;
+            }
+
+            var sortedValues = filterQueue.OrderBy(x => x).ToList();
+            return sortedValues[sortedValues.Count / 2];
+        }
+
         private void AddDataPoint(string deviceName, string data)
         {
             try
             {
                 if (!_isFormLoaded) return;
 
-                // Упрощенный парсинг - ищем последнее числовое значение в строке
-                string[] parts = data.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                string cleanData = data.Trim();
 
-                // Ищем последний элемент, который можно распарсить как double
                 double value = 0;
                 bool parsed = false;
 
-                for (int i = parts.Length - 1; i >= 0; i--)
+                if (double.TryParse(cleanData, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out value))
                 {
-                    // Убираем возможные символы форматирования
-                    string cleanPart = parts[i].TrimEnd(']', ')', '}', '>');
-                    cleanPart = cleanPart.TrimStart('[', '(', '{', '<');
+                    parsed = true;
+                }
 
-                    if (double.TryParse(cleanPart, System.Globalization.NumberStyles.Float,
+                else if (cleanData.Contains('.'))
+                {
+                    string withComma = cleanData.Replace('.', ',');
+                    if (double.TryParse(withComma, System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out value))
                     {
                         parsed = true;
+                    }
+                }
 
-                        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: данные ESP32 обычно в диапазоне 0-200
-                        // Если значение не в этом диапазоне, пропускаем его
-                        if (value < 0 || value > 250)
-                        {
-                            Log($"Пропущено неверное значение: {value}", "WARN", deviceName);
-                            return;
-                        }
-
-                        break;
+                else if (cleanData.Contains(','))
+                {
+                    string withDot = cleanData.Replace(',', '.');
+                    if (double.TryParse(withDot, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out value))
+                    {
+                        parsed = true;
                     }
                 }
 
                 if (parsed)
                 {
-                    // Преобразуем значения из диапазона 0-200 в -1.5..1.5
-                    // ESP32 отправляет синусоиду в диапазоне 0-200
-                    // Центр = 100, амплитуда = 100
-                    double normalizedValue = (value - 100) / 100.0 * 1.5;
+                    if (value < -1.2 || value > 1.2)
+                    {
+                        Log($"Пропущено неверное значение: {value}", "WARN", deviceName);
+                        return;
+                    }
 
-                    // Используем время относительно начала графика
+                    double filteredValue = ApplyFilter(deviceName, value);
+
+                    double normalizedValue = filteredValue * 1.5;
+
                     TimeSpan elapsed = DateTime.Now - _plotStartTime;
                     double timestamp = elapsed.TotalSeconds;
 
@@ -721,11 +721,52 @@ namespace ESP32StreamManager
                         UpdatePlotData(deviceName, timestamp, normalizedValue);
                     }
 
-                    // Для отладки
-                    Log($"Данные получены: исходное={value}, нормализованное={normalizedValue:F3}", "DATA", deviceName);
+                    if (DateTime.Now.Second % 2 == 0)
+                    {
+                        Log($"Данные: {value:F3} -> {filteredValue:F3}", "DATA", deviceName);
+                    }
                 }
                 else
                 {
+                    string[] numberPatterns = {
+                @"[-+]?\d+[,.]?\d*",
+                @"[-+]?\d+" 
+            };
+
+                    foreach (string pattern in numberPatterns)
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(cleanData, pattern);
+                        if (match.Success)
+                        {
+                            string numberStr = match.Value;
+                            if (double.TryParse(numberStr.Replace(',', '.'),
+                                System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out value))
+                            {
+                                if (value >= -1.2 && value <= 1.2)
+                                {
+                                    double filteredValue = ApplyFilter(deviceName, value);
+                                    double normalizedValue = filteredValue * 1.5;
+
+                                    TimeSpan elapsed = DateTime.Now - _plotStartTime;
+                                    double timestamp = elapsed.TotalSeconds;
+
+                                    if (this.InvokeRequired)
+                                    {
+                                        this.Invoke(new Action(() => UpdatePlotData(deviceName, timestamp, normalizedValue)));
+                                    }
+                                    else
+                                    {
+                                        UpdatePlotData(deviceName, timestamp, normalizedValue);
+                                    }
+
+                                    Log($"Найдено число в строке: {value:F3}", "DATA", deviceName);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
                     Log($"Не удалось распарсить данные: {data}", "WARN", deviceName);
                 }
             }
@@ -754,13 +795,11 @@ namespace ESP32StreamManager
                     if (plotSin?.Model?.Axes != null && plotSin.Model.Axes.Count > 1)
                     {
                         double minTime = Math.Max(0, timestamp - _timeWindow);
-                        double maxTime = Math.Max(timestamp + 1, minTime + 1); // Минимум 1 секунда окна
-
+                        double maxTime = Math.Max(timestamp + 1, minTime + 1);
                         plotSin.Model.Axes[1].Minimum = minTime;
                         plotSin.Model.Axes[1].Maximum = maxTime;
                     }
 
-                    // Автоматическое масштабирование по Y
                     AutoScaleYAxis(plotSin, sinData);
 
                     plotSin.InvalidatePlot(true);
@@ -780,13 +819,12 @@ namespace ESP32StreamManager
                     if (plotCos?.Model?.Axes != null && plotCos.Model.Axes.Count > 1)
                     {
                         double minTime = Math.Max(0, timestamp - _timeWindow);
-                        double maxTime = Math.Max(timestamp + 1, minTime + 1); // Минимум 1 секунда окна
+                        double maxTime = Math.Max(timestamp + 1, minTime + 1);
 
                         plotCos.Model.Axes[1].Minimum = minTime;
                         plotCos.Model.Axes[1].Maximum = maxTime;
                     }
 
-                    // Автоматическое масштабирование по Y
                     AutoScaleYAxis(plotCos, cosData);
 
                     plotCos.InvalidatePlot(true);
@@ -806,11 +844,9 @@ namespace ESP32StreamManager
             var yAxis = plot.Model.Axes[0] as LinearAxis;
             if (yAxis == null) return;
 
-            // Находим мин и макс значения
             double minY = data.Min(p => p.Y);
             double maxY = data.Max(p => p.Y);
 
-            // Добавляем небольшой запас (10%)
             double range = maxY - minY;
             double padding = range * 0.1;
 
@@ -828,10 +864,8 @@ namespace ESP32StreamManager
                 sinSeries.Points.Clear();
                 cosSeries.Points.Clear();
 
-                // Сбрасываем время начала графика
                 _plotStartTime = DateTime.Now;
 
-                // Сбрасываем оси к начальным значениям
                 if (plotSin?.Model?.Axes != null && plotSin.Model.Axes.Count > 1)
                 {
                     plotSin.Model.Axes[1].Minimum = 0;
@@ -848,7 +882,6 @@ namespace ESP32StreamManager
                     plotCos.Model.Axes[0].Maximum = 1.5;
                 }
 
-                // Принудительно обновляем графики
                 plotSin.InvalidatePlot(true);
                 plotCos.InvalidatePlot(true);
 
@@ -874,7 +907,6 @@ namespace ESP32StreamManager
             {
                 var device = dialog.SelectedDevice;
 
-                // Показываем инструкцию
                 MessageBox.Show(
                     $"Убедитесь, что {device.Name} включен и светодиод мигает.\n" +
                     $"Для настройки необходимо подключиться к WiFi сети:\n" +
@@ -894,13 +926,11 @@ namespace ESP32StreamManager
             {
                 Log($"Начинаю настройку {device.Name}...", "INFO", device.Name);
 
-                // Проверяем подключение к сети ESP
                 bool connected = _networkManager.IsConnectedToNetwork(device.ApSsid);
                 if (!connected)
                 {
                     Log($"Не подключен к сети {device.ApSsid}. Пытаюсь подключиться...", "WARN", device.Name);
 
-                    // Пытаемся подключиться
                     this.Invoke(new Action(() =>
                     {
                         var result = MessageBox.Show(
@@ -940,7 +970,6 @@ namespace ESP32StreamManager
             {
                 Log($"Проверяю доступность {device.Name}...", "INFO", device.Name);
 
-                // Проверяем доступность ESP
                 if (!_networkManager.CheckEspAvailability(device.ApIp, device.Port, 3000))
                 {
                     Log($"{device.Name} недоступен", "ERROR", device.Name);
@@ -949,7 +978,6 @@ namespace ESP32StreamManager
 
                 Log($"{device.Name} доступен", "SUCCESS", device.Name);
 
-                // Отправляем данные WiFi
                 Log($"Отправляю данные WiFi на {device.Name}...", "INFO", device.Name);
 
                 bool success = _networkManager.SendWifiCredentialsToEsp(
@@ -992,7 +1020,6 @@ namespace ESP32StreamManager
         {
             Log($"Поиск {device.Name} в домашней сети...", "INFO", device.Name);
 
-            // 1. Проверяем сохраненный IP
             if (!string.IsNullOrEmpty(device.HotspotIp))
             {
                 if (_networkManager.CheckEspAvailability(device.HotspotIp, device.Port, 1000))
@@ -1004,7 +1031,6 @@ namespace ESP32StreamManager
                 }
             }
 
-            // 2. Поиск по известным адресам
             string[] knownIps = {
                 "192.168.137.102", "192.168.137.173",
                 "192.168.137.1", "192.168.137.100",
@@ -1024,7 +1050,6 @@ namespace ESP32StreamManager
                 }
             }
 
-            // 3. Сканирование подсети
             Log($"Сканирование подсети 192.168.137.*", "INFO", device.Name);
 
             for (int i = 1; i < 255; i++)
@@ -1057,7 +1082,6 @@ namespace ESP32StreamManager
             {
                 var device = dialog.SelectedDevice;
 
-                // Проверяем доступность
                 string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
 
                 if (_networkManager.CheckEspAvailability(ip, device.Port))
@@ -1090,7 +1114,6 @@ namespace ESP32StreamManager
                 return;
             }
 
-            // Фильтруем только активные устройства
             var activeDevices = _config.EspDevices
                 .Where(d => _activeWorkers.Any(w => w.Device.Name == d.Name))
                 .ToList();
@@ -1171,7 +1194,6 @@ namespace ESP32StreamManager
 
             if (result == DialogResult.Yes)
             {
-                // Запрашиваем данные домашней сети, если не заданы
                 if (string.IsNullOrEmpty(_config.HotspotSsid) || string.IsNullOrEmpty(_config.HotspotPassword))
                 {
                     using (var form = new SimpleNetworkDialog(_config))
@@ -1184,20 +1206,18 @@ namespace ESP32StreamManager
                         }
                         else
                         {
-                            return; // Пользователь отменил
+                            return;
                         }
                     }
                 }
 
-                // Останавливаем все стримы перед настройкой
                 StopAllStreamsMenu();
 
-                // Настраиваем каждое устройство последовательно
                 foreach (var device in _config.EspDevices)
                 {
                     Log($"Настройка {device.Name}...", "INFO", device.Name);
                     ConfigureEspDevice(device);
-                    Thread.Sleep(1000); // Небольшая задержка между настройками
+                    Thread.Sleep(1000);
                 }
 
                 Log("Параллельная настройка завершена", "INFO");
@@ -1214,7 +1234,6 @@ namespace ESP32StreamManager
 
             Log("Запуск параллельного стриминга...", "INFO");
 
-            // Очищаем графики
             ClearPlots();
 
             StopAllStreamsMenu();
@@ -1222,7 +1241,6 @@ namespace ESP32StreamManager
             bool allConnected = true;
             var workers = new List<StreamWorker>();
 
-            // Проверяем доступность всех устройств
             foreach (var device in _config.EspDevices)
             {
                 string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
@@ -1241,7 +1259,6 @@ namespace ESP32StreamManager
                 return;
             }
 
-            // Запускаем стриминг со всех устройств
             foreach (var device in _config.EspDevices)
             {
                 string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
@@ -1256,7 +1273,7 @@ namespace ESP32StreamManager
 
                 workers.Add(worker);
                 worker.Start();
-                await Task.Delay(500); // Небольшая задержка между запусками
+                await Task.Delay(500);
             }
 
             Log("Параллельный стриминг запущен!", "SUCCESS");
