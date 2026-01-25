@@ -1,5 +1,4 @@
 ﻿using System.Text.Json;
-using System.Net.Sockets;
 using System.Text;
 using OxyPlot;
 using OxyPlot.Series;
@@ -40,7 +39,7 @@ namespace ESP32StreamManager
 
         private List<DataPoint> sinData = new List<DataPoint>();
         private List<DataPoint> cosData = new List<DataPoint>();
-        private const int MaxDataPoints = 500;
+        private const int MaxDataPoints = 1250;
         private LineSeries sinSeries;
         private LineSeries cosSeries;
         private DateTime _plotStartTime;
@@ -48,7 +47,7 @@ namespace ESP32StreamManager
 
         private List<string> _pendingLogs = new List<string>();
         private bool _isFormLoaded = false;
-
+        private System.Windows.Forms.Timer _statusUpdateTimer;
         public MainForm()
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -56,6 +55,7 @@ namespace ESP32StreamManager
             InitializeComponent();
             LoadConfig();
             SetupPlots();
+
         }
 
         private void InitializeComponent()
@@ -64,6 +64,10 @@ namespace ESP32StreamManager
             this.Size = new System.Drawing.Size(1400, 1000);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(28, 29, 33);
+
+            _statusUpdateTimer = new System.Windows.Forms.Timer();
+            _statusUpdateTimer.Interval = 5000; // 5 секунд
+            _statusUpdateTimer.Tick += StatusUpdateTimer_Tick;
 
             panelTop = new Panel();
             panelTop.Dock = DockStyle.Top;
@@ -127,6 +131,7 @@ namespace ESP32StreamManager
             controlPanel.Padding = new Padding(10);
             controlPanel.AutoScroll = true;
 
+
             Label lblSingle = new Label()
             {
                 Text = "ОДИНОЧНЫЕ ОПЕРАЦИИ",
@@ -154,7 +159,8 @@ namespace ESP32StreamManager
                 Text = "ПАРАЛЛЕЛЬНЫЕ ОПЕРАЦИИ",
                 ForeColor = Color.MediumTurquoise,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, 185)
+                Location = new Point(10, 185),
+                Size = new Size(280, 20)
             };
 
             btnParallelConfig = CreateButton("Настройка двух ESP", 10, 215);
@@ -168,7 +174,8 @@ namespace ESP32StreamManager
                 Text = "УТИЛИТЫ",
                 ForeColor = Color.MediumTurquoise,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, 290)
+                Location = new Point(10, 290),
+                Size = new Size(280, 20)
             };
 
             btnStopAll = CreateButton("Остановить все стримы", 10, 320);
@@ -179,7 +186,7 @@ namespace ESP32StreamManager
             btnClearPlots.BackColor = Color.FromArgb(80, 80, 0);
 
 
-            btnExit = CreateButton("Выход", 10, 425);
+            btnExit = CreateButton("Выход", 10, 395);
             btnExit.BackColor = Color.FromArgb(80, 0, 0);
             btnExit.Click += (s, e) => Close();
 
@@ -213,12 +220,72 @@ namespace ESP32StreamManager
             Load += MainForm_Load;
         }
 
+        private void StatusUpdateTimer_Tick(object sender, EventArgs e)
+        {
+            if (!_isFormLoaded) return;
+
+            // Запускаем в фоновом потоке, чтобы не блокировать UI
+            Task.Run(() => CheckEspStatuses());
+        }
+
+        private void CheckEspStatuses()
+        {
+            try
+            {
+                // Проверка на null
+                if (_networkManager == null || _config?.EspDevices == null) return;
+
+                foreach (var device in _config.EspDevices)
+                {
+                    bool isStreaming = _activeWorkers.Any(w => w.Device.Name == device.Name);
+
+                    if (!isStreaming && !string.IsNullOrEmpty(device.HotspotIp))
+                    {
+                        bool isAvailable = _networkManager.CheckEspAvailability(
+                            device.HotspotIp,
+                            device.Port,
+                            1000); 
+
+                        this.Invoke(new Action(() =>
+                        {
+                            UpdateDeviceStatusLabel(device, isAvailable, isStreaming);
+                        }));
+                    }
+                    else if (isStreaming)
+                    {
+                        this.Invoke(new Action(() =>
+                        {
+                            UpdateDeviceStatusLabel(device, true, true);
+                        }));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при проверке статусов: {ex.Message}", "ERROR");
+            }
+        }
+
+        private void UpdateDeviceStatusLabel(EspDeviceConfig device, bool isAvailable, bool isStreaming)
+        {
+            if (device.Name.Contains("Sin"))
+            {
+                lblSinStatus.Text = $"ESP32_Sin: {(isStreaming ? "Стриминг" : (isAvailable ? "Доступен" : "Отключено"))} | IP: {device.HotspotIp ?? "Нет IP"}";
+                lblSinStatus.ForeColor = isStreaming ? Color.Yellow : (isAvailable ? Color.LightGreen : Color.LightGray);
+            }
+            else if (device.Name.Contains("Cos"))
+            {
+                lblCosStatus.Text = $"ESP32_Cos: {(isStreaming ? "Стриминг" : (isAvailable ? "Доступен" : "Отключено"))} | IP: {device.HotspotIp ?? "Нет IP"}";
+                lblCosStatus.ForeColor = isStreaming ? Color.Yellow : (isAvailable ? Color.LightGreen : Color.LightGray);
+            }
+        }
 
         private void MainForm_Load(object sender, EventArgs e)
         {
             _isFormLoaded = true;
             _networkManager = new NetworkManager(this);
             _plotStartTime = DateTime.Now;
+            _statusUpdateTimer.Start();
 
             if (_pendingLogs.Count > 0)
             {
@@ -523,8 +590,6 @@ namespace ESP32StreamManager
             }
         }
 
-        private Dictionary<string, Queue<double>> _dataFilters = new Dictionary<string, Queue<double>>();
-        private const int FILTER_WINDOW_SIZE = 5;
         private class LowPassFilter
         {
             public double Prev;
@@ -534,11 +599,11 @@ namespace ESP32StreamManager
         private readonly Dictionary<string, LowPassFilter> _filters
     = new Dictionary<string, LowPassFilter>();
 
+        private readonly Dictionary<string, double> _prevStage2 = new Dictionary<string, double>();
 
-        private double ApplyFilter(string deviceName, double value)
+        private double ApplyDoubleLowPass(string deviceName, double value)
         {
-            const double alpha = 0.1;
-
+            double alpha1 = deviceName.Contains("Sin") ? 0.12 : 0.08;
             if (!_filters.TryGetValue(deviceName, out var filter))
             {
                 filter = new LowPassFilter();
@@ -549,14 +614,23 @@ namespace ESP32StreamManager
             {
                 filter.Prev = value;
                 filter.HasPrev = true;
-                return value;
+            }
+            else
+            {
+                filter.Prev = filter.Prev + alpha1 * (value - filter.Prev);
             }
 
-            double filtered =
-                filter.Prev + alpha * (value - filter.Prev);
+            double stage1 = filter.Prev;
 
-            filter.Prev = filtered;
-            return filtered;
+            double alpha2 = deviceName.Contains("Sin") ? 0.25 : 0.2;
+
+            if (!_prevStage2.TryGetValue(deviceName, out double stage2Prev))
+                stage2Prev = stage1;
+
+            double stage2 = stage2Prev + alpha2 * (stage1 - stage2Prev);
+            _prevStage2[deviceName] = stage2;
+
+            return stage2;
         }
 
         private void AddDataPoint(string deviceName, string data)
@@ -581,7 +655,7 @@ namespace ESP32StreamManager
                 if (value < -1.1 || value > 1.1)
                     return;
 
-                double filteredValue = ApplyFilter(deviceName, value);
+                double filteredValue = ApplyDoubleLowPass(deviceName, value);
 
                 double timestamp =
                     (DateTime.Now - _plotStartTime).TotalSeconds;
@@ -602,7 +676,6 @@ namespace ESP32StreamManager
             }
         }
 
-
         private void UpdatePlotData(string deviceName, double timestamp, double value)
         {
             try
@@ -621,11 +694,13 @@ namespace ESP32StreamManager
 
                     if (plotSin?.Model?.Axes != null && plotSin.Model.Axes.Count > 1)
                     {
-                        double minTime = Math.Max(0, timestamp - _timeWindow);
-                        double maxTime = Math.Max(timestamp + 1, minTime + 1);
+                        double minTime = timestamp - _timeWindow; 
+                        double maxTime = timestamp;
+                        if (minTime < 0) minTime = 0;
                         plotSin.Model.Axes[1].Minimum = minTime;
                         plotSin.Model.Axes[1].Maximum = maxTime;
                     }
+
 
                     AutoScaleYAxis(plotSin, sinData);
 
@@ -873,7 +948,10 @@ namespace ESP32StreamManager
 
         private bool FindAndSaveEspInNetwork(EspDeviceConfig device)
         {
-            Log($"Поиск {device.Name} в домашней сети...", "INFO", device.Name);
+            int deviceIndex = _config.EspDevices.IndexOf(device);
+            string deviceType = deviceIndex == 0 ? "Cos" : "Sin";
+
+            Log($"Поиск {device.Name} ({deviceType}) в домашней сети...", "INFO", device.Name);
 
             if (!string.IsNullOrEmpty(device.HotspotIp))
             {
@@ -902,7 +980,7 @@ namespace ESP32StreamManager
 
             Log("ESP не найден в хот-споте, fallback-скан...", "WARN", device.Name);
 
-            for (int i = 1; i < 255; i++)
+            for (int i = 1; i <= 254; i++)
             {
                 string testIp = $"192.168.137.{i}";
                 if (_networkManager.CheckEspAvailability(testIp, device.Port, 100))
@@ -918,6 +996,7 @@ namespace ESP32StreamManager
             Log($"{device.Name} не найден в сети", "WARN", device.Name);
             return false;
         }
+
 
         private void StreamFromSingleEsp()
         {

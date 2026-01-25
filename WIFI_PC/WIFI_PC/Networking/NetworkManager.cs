@@ -35,7 +35,6 @@ namespace ESP32StreamManager
                         stream.WriteTimeout = timeout;
                         stream.ReadTimeout = timeout;
 
-                        // Отправляем простую команду PING
                         byte[] ping = Encoding.UTF8.GetBytes("PING\n");
                         stream.Write(ping, 0, ping.Length);
 
