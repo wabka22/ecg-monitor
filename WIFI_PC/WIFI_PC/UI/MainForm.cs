@@ -7,6 +7,7 @@ using OxyPlot;
 using OxyPlot.Axes;
 using OxyPlot.Series;
 using OxyPlot.WindowsForms;
+using ESP32StreamManager.ML;
 
 namespace ESP32StreamManager
 {
@@ -31,6 +32,7 @@ namespace ESP32StreamManager
         private Button btnStopStream;
         private Button btnFindEsp;
         private Button btnClearPlot;
+        private Button btnTogglePrediction;
 
         private Label lblTitle;
         private Label lblStatus;
@@ -40,12 +42,21 @@ namespace ESP32StreamManager
         private Label lblQualityValue;
         private Label lblRecordValue;
 
+        private EcgSegmenter _segmenter;
+        private bool _predictionEnabled = false;
+
         private ListBox listLog;
 
         private readonly List<DataPoint> ecgData = new();
 
         private const int MaxDataPoints = 1250;
         private LineSeries ecgSeries;
+
+        private ScatterSeries qrsSeries;
+        private ScatterSeries spikeSeries;
+        private ScatterSeries qrsAfterSpikeSeries;
+
+        private SegmentType _lastDetectedType = SegmentType.Background;
 
         private DateTime _plotStartTime;
         private DateTime? _recordingStartTime = null;
@@ -65,6 +76,22 @@ namespace ESP32StreamManager
             InitializeComponent();
             LoadConfig();
             SetupPlots();
+            LoadModel();
+        }
+
+        private void LoadModel()
+        {
+            string modelPath = Path.Combine("ML", "best_model.onnx");
+
+            if (File.Exists(modelPath))
+            {
+                _segmenter = new EcgSegmenter(modelPath);
+                Log("Нейросетевая модель загружена", "SUCCESS");
+            }
+            else
+            {
+                Log("Модель best_model.onnx не найдена", "WARN");
+            }
         }
 
         private void InitializeComponent()
@@ -78,7 +105,7 @@ namespace ESP32StreamManager
             _statusUpdateTimer = new System.Windows.Forms.Timer();
             _statusUpdateTimer.Interval = 5000;
             _statusUpdateTimer.Tick += StatusUpdateTimer_Tick;
-
+            
             if (File.Exists("app.ico"))
             {
                 Icon = new Icon("app.ico");
@@ -185,7 +212,7 @@ namespace ESP32StreamManager
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 8,
+                RowCount = 9,
                 BackColor = AppTheme.PanelBackColor
             };
 
@@ -197,6 +224,7 @@ namespace ESP32StreamManager
             controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
             controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
             controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
             controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
             controlsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -233,6 +261,9 @@ namespace ESP32StreamManager
             btnClearPlot = UiFactory.CreateSecondaryButton("🧹  Очистить график");
             btnClearPlot.Click += (s, e) => ClearPlot();
 
+            btnTogglePrediction = UiFactory.CreateSecondaryButton("🧠  Предсказания: ВЫКЛ");
+            btnTogglePrediction.Click += (s, e) => TogglePrediction();
+
             controlsLayout.Controls.Add(lblControl, 0, 0);
             controlsLayout.Controls.Add(lblHint, 0, 1);
             controlsLayout.Controls.Add(btnFindEsp, 0, 2);
@@ -240,6 +271,7 @@ namespace ESP32StreamManager
             controlsLayout.Controls.Add(btnStartStream, 0, 4);
             controlsLayout.Controls.Add(btnStopStream, 0, 5);
             controlsLayout.Controls.Add(btnClearPlot, 0, 6);
+            controlsLayout.Controls.Add(btnTogglePrediction, 0, 7);
 
             controlPanel.Controls.Add(controlsLayout);
 
@@ -321,8 +353,8 @@ namespace ESP32StreamManager
                 MinorGridlineStyle = LineStyle.Dot,
                 MajorGridlineColor = OxyColor.FromRgb(226, 232, 240),
                 MinorGridlineColor = OxyColor.FromRgb(241, 245, 249),
-                Minimum = 0,
-                Maximum = 4095
+                Minimum = -1000,
+                Maximum = 1000
             });
 
             model.Axes.Add(new LinearAxis
@@ -347,8 +379,62 @@ namespace ESP32StreamManager
                 StrokeThickness = 2
             };
 
+            qrsSeries = new ScatterSeries
+            {
+                Title = "QRS",
+                MarkerType = MarkerType.Circle,
+                MarkerSize = 4,
+                MarkerFill = OxyColor.FromRgb(37, 99, 235)
+            };
+
+            spikeSeries = new ScatterSeries
+            {
+                Title = "SPIKE",
+                MarkerType = MarkerType.Diamond,
+                MarkerSize = 5,
+                MarkerFill = OxyColor.FromRgb(220, 38, 38)
+            };
+
+            qrsAfterSpikeSeries = new ScatterSeries
+            {
+                Title = "QRS after spike",
+                MarkerType = MarkerType.Triangle,
+                MarkerSize = 5,
+                MarkerFill = OxyColor.FromRgb(147, 51, 234)
+            };
+
             model.Series.Add(ecgSeries);
+            model.Series.Add(qrsSeries);
+            model.Series.Add(spikeSeries);
+            model.Series.Add(qrsAfterSpikeSeries);
+
             plotEcg.Model = model;
+        }
+
+        private void TogglePrediction()
+        {
+            if (_segmenter == null)
+            {
+                MessageBox.Show(
+                    "Модель не загружена. Проверьте файл ML/best_model.onnx.",
+                    "Предсказания недоступны",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                return;
+            }
+
+            _predictionEnabled = !_predictionEnabled;
+
+            btnTogglePrediction.Text = _predictionEnabled
+                ? "🧠  Предсказания: ВКЛ"
+                : "🧠  Предсказания: ВЫКЛ";
+
+            Log(
+                _predictionEnabled
+                    ? "Нейросетевые предсказания включены"
+                    : "Нейросетевые предсказания выключены",
+                "INFO");
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -685,7 +771,7 @@ namespace ESP32StreamManager
                     return;
                 }
 
-                if (value < 0 || value > 4095)
+                if (value < -4095 || value > 4095)
                 {
                     Log($"Значение вне диапазона АЦП: {value}", "WARN", deviceName);
                     return;
@@ -693,10 +779,20 @@ namespace ESP32StreamManager
 
                 double timestamp = (DateTime.Now - _plotStartTime).TotalSeconds;
 
+                EcgPrediction prediction = null;
+
+                if (_predictionEnabled && _segmenter != null)
+                {
+                    if (_segmenter.AddSample((float)value, out var currentPrediction))
+                    {
+                        prediction = currentPrediction;
+                    }
+                }
+
                 if (InvokeRequired)
-                    Invoke(new Action(() => UpdatePlotData(deviceName, timestamp, value)));
+                    Invoke(new Action(() => UpdatePlotData(deviceName, timestamp, value, prediction)));
                 else
-                    UpdatePlotData(deviceName, timestamp, value);
+                    UpdatePlotData(deviceName, timestamp, value, prediction);
             }
             catch (Exception ex)
             {
@@ -704,7 +800,11 @@ namespace ESP32StreamManager
             }
         }
 
-        private void UpdatePlotData(string deviceName, double timestamp, double value)
+        private void UpdatePlotData(
+            string deviceName,
+            double timestamp,
+            double value,
+            EcgPrediction prediction)
         {
             try
             {
@@ -718,6 +818,13 @@ namespace ESP32StreamManager
                     ecgSeries.Points.Clear();
                     ecgSeries.Points.AddRange(ecgData);
                 }
+
+                if (prediction != null)
+                {
+                    AddPredictionPoint(timestamp, value, prediction);
+                }
+
+                TrimPredictionSeries(timestamp);
 
                 _receivedPoints++;
 
@@ -739,6 +846,67 @@ namespace ESP32StreamManager
             catch (Exception ex)
             {
                 Log($"Ошибка обновления графика: {ex.Message}", "ERROR", deviceName);
+            }
+        }
+
+        private void AddPredictionPoint(
+            double timestamp,
+            double value,
+            EcgPrediction prediction)
+        {
+                Log(
+        $"Prediction: {prediction.Type}, prob={prediction.Probability:0.000}",
+        "INFO");
+
+            var type = prediction.Type;
+
+            if (type == SegmentType.Qrs &&
+                _lastDetectedType == SegmentType.Spike)
+            {
+                type = SegmentType.QrsAfterSpike;
+            }
+
+            switch (type)
+            {
+                case SegmentType.Qrs:
+                    qrsSeries.Points.Add(new ScatterPoint(timestamp, value));
+                    lblStatus.Text = $"Распознано: QRS | {prediction.Probability:0.00}";
+                    break;
+
+                case SegmentType.Spike:
+                    spikeSeries.Points.Add(new ScatterPoint(timestamp, value));
+                    lblStatus.Text = $"Распознано: SPIKE | {prediction.Probability:0.00}";
+                    break;
+
+                case SegmentType.QrsAfterSpike:
+                    qrsAfterSpikeSeries.Points.Add(new ScatterPoint(timestamp, value));
+                    lblStatus.Text = $"Распознано: QRS after spike | {prediction.Probability:0.00}";
+                    break;
+
+                default:
+                    break;
+            }
+
+            if (type != SegmentType.Background)
+            {
+                _lastDetectedType = type;
+            }
+        }
+
+        private void TrimPredictionSeries(double timestamp)
+        {
+            double minTime = Math.Max(0, timestamp - _timeWindow);
+
+            RemoveOldPoints(qrsSeries, minTime);
+            RemoveOldPoints(spikeSeries, minTime);
+            RemoveOldPoints(qrsAfterSpikeSeries, minTime);
+        }
+
+        private void RemoveOldPoints(ScatterSeries series, double minTime)
+        {
+            while (series.Points.Count > 0 && series.Points[0].X < minTime)
+            {
+                series.Points.RemoveAt(0);
             }
         }
 
@@ -815,6 +983,11 @@ namespace ESP32StreamManager
                     ecgData.Clear();
 
                 ecgSeries.Points.Clear();
+                qrsSeries.Points.Clear();
+                spikeSeries.Points.Clear();
+                qrsAfterSpikeSeries.Points.Clear();
+
+                _lastDetectedType = SegmentType.Background;
 
                 _plotStartTime = DateTime.Now;
                 _receivedPoints = 0;
