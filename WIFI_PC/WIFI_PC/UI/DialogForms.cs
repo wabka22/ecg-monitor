@@ -4,9 +4,9 @@ namespace ESP32StreamManager
 {
     public class DeviceSelectionDialog : Form
     {
-        public EspDeviceConfig SelectedDevice { get; private set; }
+        public EspDevice SelectedDevice { get; private set; }
 
-        public DeviceSelectionDialog(List<EspDeviceConfig> devices, string title)
+        public DeviceSelectionDialog(List<EspDevice> devices, string title)
         {
             this.Text = title;
             this.Size = new Size(400, 200);
@@ -193,7 +193,7 @@ namespace ESP32StreamManager
             {
                 if (!row.IsNewRow)
                 {
-                    Config.EspDevices.Add(new EspDeviceConfig
+                    Config.EspDevices.Add(new EspDevice
                     {
                         Name = row.Cells[0].Value?.ToString() ?? "",
                         ApSsid = row.Cells[1].Value?.ToString() ?? "",

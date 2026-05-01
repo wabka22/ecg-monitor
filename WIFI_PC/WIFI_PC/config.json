@@ -1,27 +1,15 @@
 {
   "HotspotSsid": "MyHomeWiFi",
   "HotspotPassword": "mypassword123",
-  "Esp1NetworkName": "ESP32_Cos_Streamer",
-  "Esp2NetworkName": "ESP32_Sin_Streamer",
-  "EspNetworkPassword": "12345678",
   "EspDevices": [
     {
-      "Name": "ESP32_Cos",
-      "ApSsid": "ESP32_Cos_Streamer",
+      "Name": "ESP32_ECG",
+      "ApSsid": "ESP32_ECG_Streamer",
       "ApPassword": "12345678",
       "ApIp": "192.168.4.1",
       "Port": 8888,
       "HotspotIp": "192.168.137.191",
       "MacAddress": "c4:de:e2:19:2b:6c"
-    },
-    {
-      "Name": "ESP32_Sin",
-      "ApSsid": "ESP32_Sin_Streamer",
-      "ApPassword": "12345678",
-      "ApIp": "192.168.4.1",
-      "Port": 8888,
-      "HotspotIp": "192.168.137.222",
-      "MacAddress": "cc:7b:5c:34:cc:f8"
     }
   ]
 }

@@ -4,10 +4,10 @@
     {
         public string HotspotSsid { get; set; } = "MyHomeWiFi";
         public string HotspotPassword { get; set; } = "mypassword122";
-        public List<EspDeviceConfig> EspDevices { get; set; } = new List<EspDeviceConfig>();
+        public List<EspDevice> EspDevices { get; set; } = new List<EspDevice>();
     }
 
-    public class EspDeviceConfig
+    public class EspDevice
     {
         public string Name { get; set; } = "";
         public string ApSsid { get; set; } = "";

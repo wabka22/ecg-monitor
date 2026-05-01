@@ -1,53 +1,63 @@
-﻿using System.Text.Json;
+﻿using System.Diagnostics;
+using System.Globalization;
 using System.Text;
-using OxyPlot;
-using OxyPlot.Series;
-using OxyPlot.Axes;
-using OxyPlot.WindowsForms;
-using System.Diagnostics;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using OxyPlot;
+using OxyPlot.Axes;
+using OxyPlot.Series;
+using OxyPlot.WindowsForms;
 
 namespace ESP32StreamManager
 {
     public partial class MainForm : Form
     {
         private const string ConfigFile = "config.json";
-        public List<StreamWorker> _activeWorkers = new List<StreamWorker>();
+
+        public List<StreamWorker> _activeWorkers = new();
+
         private Config _config;
         private NetworkManager _networkManager;
 
         private Panel panelTop;
-        private Panel panelCenter;
+        private Panel panelMain;
         private Panel panelBottom;
-        private PlotView plotSin;
-        private PlotView plotCos;
-        private Button btnConnectSingle;
-        private Button btnStreamSingle;
-        private Button btnStopSingle;
-        private Button btnFindESP;
-        private Button btnParallelConfig;
-        private Button btnParallelStream;
-        private Button btnStopAll;
-        private Button btnClearPlots;
-        private Button btnDiagnose;
-        private Button btnExit;
-        private Label lblStatus;
-        private Label lblSinStatus;
-        private Label lblCosStatus;
-        private RichTextBox txtLog;
         private Panel controlPanel;
 
-        private List<DataPoint> sinData = new List<DataPoint>();
-        private List<DataPoint> cosData = new List<DataPoint>();
+        private PlotView plotEcg;
+
+        private Button btnConfigureEsp;
+        private Button btnStartStream;
+        private Button btnStopStream;
+        private Button btnFindEsp;
+        private Button btnClearPlot;
+
+        private Label lblTitle;
+        private Label lblStatus;
+
+        private Label lblDeviceValue;
+        private Label lblIpValue;
+        private Label lblQualityValue;
+        private Label lblRecordValue;
+
+        private ListBox listLog;
+
+        private readonly List<DataPoint> ecgData = new();
+
         private const int MaxDataPoints = 1250;
-        private LineSeries sinSeries;
-        private LineSeries cosSeries;
+        private LineSeries ecgSeries;
+
         private DateTime _plotStartTime;
+        private DateTime? _recordingStartTime = null;
+
+        private int _receivedPoints = 0;
         private double _timeWindow = 30.0;
 
-        private List<string> _pendingLogs = new List<string>();
+        private readonly List<string> _pendingLogs = new();
         private bool _isFormLoaded = false;
+
         private System.Windows.Forms.Timer _statusUpdateTimer;
+
         public MainForm()
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -55,228 +65,290 @@ namespace ESP32StreamManager
             InitializeComponent();
             LoadConfig();
             SetupPlots();
-
         }
 
         private void InitializeComponent()
         {
-            this.Text = "ESP32 Dual Stream Manager";
-            this.Size = new System.Drawing.Size(1400, 1000);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(28, 29, 33);
+            Text = "Система регистрации биосигналов";
+            StartPosition = FormStartPosition.CenterScreen;
+            WindowState = FormWindowState.Maximized;
+            BackColor = AppTheme.MainBackColor;
+            MinimumSize = new Size(1200, 760);
 
             _statusUpdateTimer = new System.Windows.Forms.Timer();
-            _statusUpdateTimer.Interval = 5000; // 5 секунд
+            _statusUpdateTimer.Interval = 5000;
             _statusUpdateTimer.Tick += StatusUpdateTimer_Tick;
 
-            panelTop = new Panel();
-            panelTop.Dock = DockStyle.Top;
-            panelTop.Height = 90;
-            panelTop.BackColor = Color.FromArgb(0, 0, 48);
-
-            lblStatus = new Label();
-            lblStatus.ForeColor = Color.White;
-            lblStatus.Font = new Font("Segoe UI", 11, FontStyle.Bold);
-            lblStatus.Text = "Статус: Готов к работе";
-            lblStatus.Location = new Point(20, 12);
-            lblStatus.Size = new Size(500, 25);
-
-            lblSinStatus = new Label();
-            lblSinStatus.ForeColor = Color.MediumAquamarine;
-            lblSinStatus.Font = new Font("Segoe UI", 9);
-            lblSinStatus.Text = "ESP32_Sin: Отключено";
-            lblSinStatus.Location = new Point(20, 40);
-
-            lblCosStatus = new Label();
-            lblCosStatus.ForeColor = Color.MediumAquamarine;
-            lblCosStatus.Font = new Font("Segoe UI", 9);
-            lblCosStatus.Text = "ESP32_Cos: Отключено";
-            lblCosStatus.Location = new Point(20, 60);
-
-            panelTop.Controls.AddRange(new Control[] { lblStatus, lblSinStatus, lblCosStatus });
-
-            panelCenter = new Panel();
-            panelCenter.Dock = DockStyle.Fill;
-            panelCenter.BackColor = Color.FromArgb(0, 0, 48);
-            panelCenter.Padding = new Padding(10);
-
-            TableLayoutPanel tableLayout = new TableLayoutPanel();
-            tableLayout.Dock = DockStyle.Fill;
-            tableLayout.RowCount = 2;
-            tableLayout.ColumnCount = 1;
-            tableLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            tableLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-
-            plotSin = new PlotView();
-            plotSin.Dock = DockStyle.Fill;
-            plotSin.BackColor = Color.FromArgb(44, 46, 52);
-
-            plotCos = new PlotView();
-            plotCos.Dock = DockStyle.Fill;
-            plotCos.BackColor = Color.FromArgb(44, 46, 52);
-
-            tableLayout.Controls.Add(plotSin, 0, 0);
-            tableLayout.Controls.Add(plotCos, 0, 1);
-            panelCenter.Controls.Add(tableLayout);
-
-            panelBottom = new Panel();
-            panelBottom.Dock = DockStyle.Bottom;
-            panelBottom.Height = 350;
-            panelBottom.BackColor = Color.FromArgb(36, 38, 42);
-
-            controlPanel = new Panel();
-            controlPanel.Dock = DockStyle.Left;
-            controlPanel.Width = 320;
-            controlPanel.BackColor = Color.FromArgb(0, 0, 48);
-            controlPanel.Padding = new Padding(10);
-            controlPanel.AutoScroll = true;
-
-
-            Label lblSingle = new Label()
+            if (File.Exists("app.ico"))
             {
-                Text = "ОДИНОЧНЫЕ ОПЕРАЦИИ",
-                ForeColor = Color.MediumTurquoise,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, 10),
-                Size = new Size(280, 20)
+                Icon = new Icon("app.ico");
+            }
+
+            panelTop = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 135,
+                BackColor = AppTheme.MainBackColor,
+                Padding = new Padding(20)
             };
 
-            btnConnectSingle = CreateButton("Настроить ESP", 10, 40);
-            btnConnectSingle.Click += (s, e) => ConfigureSingleEsp();
-
-            btnStreamSingle = CreateButton("Стриминг с одной ESP", 10, 75);
-            btnStreamSingle.Click += (s, e) => StreamFromSingleEsp();
-
-            btnStopSingle = CreateButton("Остановить стриминг", 10, 110);
-            btnStopSingle.Click += (s, e) => StopSingleStream();
-            btnStopSingle.BackColor = Color.FromArgb(90, 0, 0);
-
-            btnFindESP = CreateButton("Найти ESP в сети", 10, 145);
-            btnFindESP.Click += (s, e) => FindEspInHotspotNetwork();
-
-            Label lblParallel = new Label()
+            var topLayout = new TableLayoutPanel
             {
-                Text = "ПАРАЛЛЕЛЬНЫЕ ОПЕРАЦИИ",
-                ForeColor = Color.MediumTurquoise,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, 185),
-                Size = new Size(280, 20)
+                Dock = DockStyle.Fill,
+                ColumnCount = 5,
+                RowCount = 1,
+                BackColor = AppTheme.MainBackColor
             };
 
-            btnParallelConfig = CreateButton("Настройка двух ESP", 10, 215);
-            btnParallelConfig.Click += (s, e) => ConfigureTwoEspParallel();
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
+            topLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 18));
 
-            btnParallelStream = CreateButton("Параллельный стриминг", 10, 250);
-            btnParallelStream.Click += (s, e) => StreamFromTwoEspParallel();
+            var titleCard = UiFactory.CreateRoundedPanel(
+                20,
+                new Padding(20),
+                new Padding(0, 0, 14, 0));
 
-            Label lblUtility = new Label()
+            lblTitle = new Label
             {
-                Text = "ОСТАНОВКА СТРИМИНГА",
-                ForeColor = Color.MediumTurquoise,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Location = new Point(10, 290),
-                Size = new Size(280, 20)
+                Text = "ECG Stream Monitor",
+                ForeColor = AppTheme.TextColor,
+                Font = new Font("Segoe UI", 22, FontStyle.Bold),
+                Dock = DockStyle.Top,
+                Height = 42
             };
 
-            btnStopAll = CreateButton("Остановить все стримы", 10, 320);
-            btnStopAll.Click += (s, e) => StopAllStreamsMenu();
+            lblStatus = new Label
+            {
+                Text = "Система регистрации биосигналов",
+                ForeColor = AppTheme.MutedTextColor,
+                Font = new Font("Segoe UI", 11),
+                Dock = DockStyle.Top,
+                Height = 30
+            };
 
-            btnClearPlots = CreateButton("Очистить графики", 10, 355);
-            btnClearPlots.Click += (s, e) => ClearPlots();
-            btnClearPlots.BackColor = Color.FromArgb(0, 80, 0);
+            titleCard.Controls.Add(lblStatus);
+            titleCard.Controls.Add(lblTitle);
 
+            var deviceCard = UiFactory.CreateStatusCard("Устройство", "Не проверено", out lblDeviceValue);
+            var ipCard = UiFactory.CreateStatusCard("IP-адрес", "Не задан", out lblIpValue);
+            var qualityCard = UiFactory.CreateStatusCard("Качество", "Не определено", out lblQualityValue);
+            var recordCard = UiFactory.CreateStatusCard("Запись", "00:00 | 0 точек", out lblRecordValue);
 
-            btnExit = CreateButton("Выход", 10, 395);
-            btnExit.BackColor = Color.FromArgb(80, 0, 0);
-            btnExit.Click += (s, e) => Close();
+            topLayout.Controls.Add(titleCard, 0, 0);
+            topLayout.Controls.Add(deviceCard, 1, 0);
+            topLayout.Controls.Add(ipCard, 2, 0);
+            topLayout.Controls.Add(qualityCard, 3, 0);
+            topLayout.Controls.Add(recordCard, 4, 0);
 
-            controlPanel.Controls.AddRange(new Control[] {
-        lblSingle, btnConnectSingle, btnStreamSingle, btnStopSingle, btnFindESP,
-        lblParallel, btnParallelConfig, btnParallelStream,
-        lblUtility, btnStopAll, btnClearPlots, btnDiagnose, btnExit
-    });
+            panelTop.Controls.Add(topLayout);
 
-            Panel logPanel = new Panel();
-            logPanel.Dock = DockStyle.Fill;
-            logPanel.Padding = new Padding(5);
+            panelMain = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.MainBackColor,
+                Padding = new Padding(20)
+            };
 
-            txtLog = new RichTextBox();
-            txtLog.Multiline = true;
-            txtLog.Dock = DockStyle.Fill;
-            txtLog.BackColor = Color.FromArgb(0, 0, 48);
-            txtLog.ForeColor = Color.White;
-            txtLog.Font = new Font("Consolas", 9);
-            txtLog.ReadOnly = true;
+            var mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+                BackColor = AppTheme.MainBackColor
+            };
 
-            logPanel.Controls.Add(txtLog);
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70));
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+
+            var graphCard = UiFactory.CreateRoundedPanel(
+                22,
+                new Padding(14),
+                new Padding(0, 0, 15, 0));
+
+            plotEcg = new PlotView
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.White
+            };
+
+            graphCard.Controls.Add(plotEcg);
+
+            controlPanel = UiFactory.CreateRoundedPanel(
+                22,
+                new Padding(24),
+                new Padding(0));
+
+            var controlsLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 8,
+                BackColor = AppTheme.PanelBackColor
+            };
+
+            controlsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var lblControl = new Label
+            {
+                Text = "Управление",
+                ForeColor = AppTheme.TextColor,
+                Font = new Font("Segoe UI", 20, FontStyle.Bold),
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
+            var lblHint = new Label
+            {
+                Text = "Пошаговое подключение устройства и регистрация сигнала.",
+                ForeColor = AppTheme.MutedTextColor,
+                Font = new Font("Segoe UI", 11),
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.TopLeft
+            };
+
+            btnFindEsp = UiFactory.CreateSecondaryButton("🔍  Найти устройство");
+            btnFindEsp.Click += (s, e) => FindEspInHotspotNetwork();
+
+            btnConfigureEsp = UiFactory.CreateSecondaryButton("📶  Настроить Wi-Fi");
+            btnConfigureEsp.Click += (s, e) => ConfigureSingleEsp();
+
+            btnStartStream = UiFactory.CreatePrimaryButton("▶  НАЧАТЬ ЗАПИСЬ");
+            btnStartStream.Click += (s, e) => StreamFromSingleEsp();
+
+            btnStopStream = UiFactory.CreateDangerButton("■  СТОП");
+            btnStopStream.Click += (s, e) => StopSingleStream();
+
+            btnClearPlot = UiFactory.CreateSecondaryButton("🧹  Очистить график");
+            btnClearPlot.Click += (s, e) => ClearPlot();
+
+            controlsLayout.Controls.Add(lblControl, 0, 0);
+            controlsLayout.Controls.Add(lblHint, 0, 1);
+            controlsLayout.Controls.Add(btnFindEsp, 0, 2);
+            controlsLayout.Controls.Add(btnConfigureEsp, 0, 3);
+            controlsLayout.Controls.Add(btnStartStream, 0, 4);
+            controlsLayout.Controls.Add(btnStopStream, 0, 5);
+            controlsLayout.Controls.Add(btnClearPlot, 0, 6);
+
+            controlPanel.Controls.Add(controlsLayout);
+
+            mainLayout.Controls.Add(graphCard, 0, 0);
+            mainLayout.Controls.Add(controlPanel, 1, 0);
+
+            panelMain.Controls.Add(mainLayout);
+
+            panelBottom = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 155,
+                BackColor = AppTheme.MainBackColor,
+                Padding = new Padding(20, 0, 20, 20)
+            };
+
+            var logPanel = UiFactory.CreateRoundedPanel(
+                20,
+                new Padding(14),
+                new Padding(0));
+
+            var lblLog = new Label
+            {
+                Text = "Журнал событий",
+                ForeColor = AppTheme.TextColor,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Dock = DockStyle.Top,
+                Height = 32
+            };
+
+            listLog = new ListBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(248, 250, 252),
+                ForeColor = AppTheme.TextColor,
+                Font = new Font("Segoe UI", 10),
+                BorderStyle = BorderStyle.None,
+                IntegralHeight = false,
+                DrawMode = DrawMode.OwnerDrawFixed,
+                ItemHeight = 26
+            };
+
+            listLog.DrawItem += ListLog_DrawItem;
+
+            logPanel.Controls.Add(listLog);
+            logPanel.Controls.Add(lblLog);
 
             panelBottom.Controls.Add(logPanel);
-            panelBottom.Controls.Add(controlPanel);
 
-            Controls.Add(panelCenter);
+            Controls.Add(panelMain);
             Controls.Add(panelBottom);
             Controls.Add(panelTop);
 
             Load += MainForm_Load;
         }
 
-        private void StatusUpdateTimer_Tick(object sender, EventArgs e)
+        private void SetupPlots()
         {
-            if (!_isFormLoaded) return;
-
-            Task.Run(() => CheckEspStatuses());
-        }
-
-        private void CheckEspStatuses()
-        {
-            try
+            var model = new PlotModel
             {
-                // Проверка на null
-                if (_networkManager == null || _config?.EspDevices == null) return;
+                Title = "Сигнал ЭКГ",
+                TitleColor = OxyColor.FromRgb(30, 41, 59),
+                TitleFontSize = 16,
+                Background = OxyColors.White,
+                PlotAreaBackground = OxyColor.FromRgb(250, 252, 255),
+                PlotAreaBorderColor = OxyColor.FromRgb(203, 213, 225),
+                PlotAreaBorderThickness = new OxyThickness(1),
+                TextColor = OxyColor.FromRgb(51, 65, 85)
+            };
 
-                foreach (var device in _config.EspDevices)
-                {
-                    bool isStreaming = _activeWorkers.Any(w => w.Device.Name == device.Name);
-
-                    if (!isStreaming && !string.IsNullOrEmpty(device.HotspotIp))
-                    {
-                        bool isAvailable = _networkManager.CheckEspAvailability(
-                            device.HotspotIp,
-                            device.Port,
-                            1000);
-
-                        this.Invoke(new Action(() =>
-                        {
-                            UpdateDeviceStatusLabel(device, isAvailable, isStreaming);
-                        }));
-                    }
-                    else if (isStreaming)
-                    {
-                        this.Invoke(new Action(() =>
-                        {
-                            UpdateDeviceStatusLabel(device, true, true);
-                        }));
-                    }
-                }
-            }
-            catch (Exception ex)
+            model.Axes.Add(new LinearAxis
             {
-                Log($"Ошибка при проверке статусов: {ex.Message}", "ERROR");
-            }
-        }
+                Position = AxisPosition.Left,
+                Title = "Амплитуда АЦП",
+                TextColor = OxyColor.FromRgb(51, 65, 85),
+                TitleColor = OxyColor.FromRgb(51, 65, 85),
+                TicklineColor = OxyColor.FromRgb(148, 163, 184),
+                MajorGridlineStyle = LineStyle.Solid,
+                MinorGridlineStyle = LineStyle.Dot,
+                MajorGridlineColor = OxyColor.FromRgb(226, 232, 240),
+                MinorGridlineColor = OxyColor.FromRgb(241, 245, 249),
+                Minimum = 0,
+                Maximum = 4095
+            });
 
-        private void UpdateDeviceStatusLabel(EspDeviceConfig device, bool isAvailable, bool isStreaming)
-        {
-            if (device.Name.Contains("Sin"))
+            model.Axes.Add(new LinearAxis
             {
-                lblSinStatus.Text = $"ESP32_Sin: {(isStreaming ? "Стриминг" : (isAvailable ? "Доступен" : "Отключено"))} | IP: {device.HotspotIp ?? "Нет IP"}";
-                lblSinStatus.ForeColor = isStreaming ? Color.Yellow : (isAvailable ? Color.LightGreen : Color.LightGray);
-            }
-            else if (device.Name.Contains("Cos"))
+                Position = AxisPosition.Bottom,
+                Title = "Время, с",
+                TextColor = OxyColor.FromRgb(51, 65, 85),
+                TitleColor = OxyColor.FromRgb(51, 65, 85),
+                TicklineColor = OxyColor.FromRgb(148, 163, 184),
+                MajorGridlineStyle = LineStyle.Solid,
+                MinorGridlineStyle = LineStyle.Dot,
+                MajorGridlineColor = OxyColor.FromRgb(226, 232, 240),
+                MinorGridlineColor = OxyColor.FromRgb(241, 245, 249),
+                Minimum = 0,
+                Maximum = 30
+            });
+
+            ecgSeries = new LineSeries
             {
-                lblCosStatus.Text = $"ESP32_Cos: {(isStreaming ? "Стриминг" : (isAvailable ? "Доступен" : "Отключено"))} | IP: {device.HotspotIp ?? "Нет IP"}";
-                lblCosStatus.ForeColor = isStreaming ? Color.Yellow : (isAvailable ? Color.LightGreen : Color.LightGray);
-            }
+                Title = "ECG",
+                Color = OxyColor.FromRgb(37, 99, 235),
+                StrokeThickness = 2
+            };
+
+            model.Series.Add(ecgSeries);
+            plotEcg.Model = model;
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -286,189 +358,110 @@ namespace ESP32StreamManager
             _plotStartTime = DateTime.Now;
             _statusUpdateTimer.Start();
 
-            if (_pendingLogs.Count > 0)
-            {
-                foreach (var log in _pendingLogs)
-                {
-                    AddLogToTextBox(log, Color.White);
-                }
-                _pendingLogs.Clear();
-            }
+            foreach (var log in _pendingLogs)
+                AddLogToTextBox(log, AppTheme.TextColor);
+
+            _pendingLogs.Clear();
 
             UpdateUI();
-
             Task.Run(() => CheckEspOnStartup());
         }
 
-        private void CheckEspOnStartup()
+        private void StatusUpdateTimer_Tick(object sender, EventArgs e)
         {
-            Log("=== ПРОВЕРКА ДОСТУПНОСТИ ESP ПРИ СТАРТЕ ===", "INFO");
+            if (!_isFormLoaded) return;
+            Task.Run(() => CheckEspStatuses());
+        }
 
-            foreach (var device in _config.EspDevices)
+        private EspDevice GetMainDevice()
+        {
+            return _config?.EspDevices?.FirstOrDefault();
+        }
+
+        private void CheckEspStatuses()
+        {
+            try
             {
+                if (_networkManager == null || _config?.EspDevices == null)
+                    return;
+
+                var device = GetMainDevice();
+                if (device == null)
+                    return;
+
+                bool isStreaming = _activeWorkers.Any(w => w.Device.Name == device.Name);
+                bool isAvailable = false;
+
                 if (!string.IsNullOrEmpty(device.HotspotIp))
                 {
-                    bool isAvailable = _networkManager.CheckEspAvailability(device.HotspotIp, device.Port, 1000);
-                    Log($"{device.Name} ({device.HotspotIp}): {(isAvailable ? "✓ Доступна" : "✗ Недоступна")}",
-                        isAvailable ? "SUCCESS" : "WARN");
+                    isAvailable = _networkManager.CheckEspAvailability(
+                        device.HotspotIp,
+                        device.Port,
+                        1000);
                 }
+
+                Invoke(new Action(() =>
+                {
+                    UpdateDeviceStatusLabel(device, isAvailable, isStreaming);
+                }));
             }
-            UpdateUI();
+            catch (Exception ex)
+            {
+                Log($"Ошибка при проверке статуса: {ex.Message}", "ERROR");
+            }
         }
 
-        private Button CreateButton(string text, int x, int y)
+        private void UpdateDeviceStatusLabel(EspDevice device, bool isAvailable, bool isStreaming)
         {
-            var btn = new Button();
-            btn.Text = text;
-            btn.Location = new Point(x, y);
-            btn.Size = new Size(300, 30);
-            btn.BackColor = Color.FromArgb(66, 66, 66);
-            btn.ForeColor = Color.White;
-            btn.FlatStyle = FlatStyle.Flat;
-            btn.Font = new Font("Segoe UI", 9);
-            return btn;
-        }
-
-        private void SetupPlots()
-        {
-            var sinModel = new PlotModel
+            if (isStreaming)
             {
-                Title = "ESP32_Sin - Синусоидальный сигнал",
-                TitleColor = OxyColors.Cyan,
-                TitleFontSize = 14,
-                PlotAreaBorderColor = OxyColors.Gray,
-                PlotAreaBorderThickness = new OxyThickness(1),
-                TextColor = OxyColors.White,
-                Background = OxyColors.Black
-            };
-
-            sinModel.Axes.Add(new LinearAxis
+                lblDeviceValue.Text = "Регистрация";
+                lblDeviceValue.ForeColor = AppTheme.AccentColor;
+            }
+            else if (isAvailable)
             {
-                Position = AxisPosition.Left,
-                Title = "Амплитуда",
-                TitleColor = OxyColors.White,
-                TextColor = OxyColors.White,
-                TicklineColor = OxyColors.Gray,
-                MajorGridlineColor = OxyColors.Gray,
-                MinorGridlineColor = OxyColors.DarkGray,
-                Minimum = -1.5,
-                Maximum = 1.5
-            });
-
-            sinModel.Axes.Add(new LinearAxis
+                lblDeviceValue.Text = "Доступно";
+                lblDeviceValue.ForeColor = AppTheme.SuccessColor;
+            }
+            else
             {
-                Position = AxisPosition.Bottom,
-                Title = "Время (с)",
-                TitleColor = OxyColors.White,
-                TextColor = OxyColors.White,
-                TicklineColor = OxyColors.Gray,
-                MajorGridlineColor = OxyColors.Gray,
-                MinorGridlineColor = OxyColors.DarkGray
-            });
+                lblDeviceValue.Text = "Недоступно";
+                lblDeviceValue.ForeColor = AppTheme.DangerColor;
+            }
 
-            sinSeries = new LineSeries
-            {
-                Title = "Sin",
-                Color = OxyColors.LightGreen,
-                StrokeThickness = 2
-            };
-
-            sinModel.Series.Add(sinSeries);
-            plotSin.Model = sinModel;
-
-            var cosModel = new PlotModel
-            {
-                Title = "ESP32_Cos - Косинусоидальный сигнал",
-                TitleColor = OxyColors.Cyan,
-                TitleFontSize = 14,
-                PlotAreaBorderColor = OxyColors.Gray,
-                PlotAreaBorderThickness = new OxyThickness(1),
-                TextColor = OxyColors.White,
-                Background = OxyColors.Black
-            };
-
-            cosModel.Axes.Add(new LinearAxis
-            {
-                Position = AxisPosition.Left,
-                Title = "Амплитуда",
-                TitleColor = OxyColors.White,
-                TextColor = OxyColors.White,
-                TicklineColor = OxyColors.Gray,
-                MajorGridlineColor = OxyColors.Gray,
-                MinorGridlineColor = OxyColors.DarkGray,
-                Minimum = -1.5,
-                Maximum = 1.5
-            });
-
-            cosModel.Axes.Add(new LinearAxis
-            {
-                Position = AxisPosition.Bottom,
-                Title = "Время (с)",
-                TitleColor = OxyColors.White,
-                TextColor = OxyColors.White,
-                TicklineColor = OxyColors.Gray,
-                MajorGridlineColor = OxyColors.Gray,
-                MinorGridlineColor = OxyColors.DarkGray
-            });
-
-            cosSeries = new LineSeries
-            {
-                Title = "Cos",
-                Color = OxyColors.LightCoral,
-                StrokeThickness = 2
-            };
-
-            cosModel.Series.Add(cosSeries);
-            plotCos.Model = cosModel;
+            lblIpValue.Text = device.HotspotIp ?? "Не задан";
         }
 
         public void UpdateUI()
         {
             if (!_isFormLoaded) return;
 
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(UpdateUI));
+                Invoke(new Action(UpdateUI));
                 return;
             }
 
-            lblStatus.Text = $"Статус: Активных стримов: {_activeWorkers.Count}";
+            var device = GetMainDevice();
+            bool isStreaming = device != null && _activeWorkers.Any(w => w.Device.Name == device.Name);
 
-            var sinDevice = _config?.EspDevices.FirstOrDefault(d => d.Name.Contains("Sin"));
-            var cosDevice = _config?.EspDevices.FirstOrDefault(d => d.Name.Contains("Cos"));
+            lblStatus.Text = isStreaming
+                ? "Регистрация сигнала активна"
+                : "Система регистрации биосигналов";
 
-            if (sinDevice != null)
+            btnStartStream.Enabled = !isStreaming;
+            btnStopStream.Enabled = isStreaming;
+
+            if (device != null)
+                lblIpValue.Text = device.HotspotIp ?? "Не задан";
+
+            if (plotEcg?.Model != null)
             {
-                bool isStreaming = _activeWorkers.Any(w => w.Device.Name == sinDevice.Name);
-                bool hasIP = !string.IsNullOrEmpty(sinDevice.HotspotIp);
-                lblSinStatus.Text = $"ESP32_ADS: {(isStreaming ? "Стриминг" : "Отключено")} | IP: {(hasIP ? sinDevice.HotspotIp : "Нет IP")}";
-                lblSinStatus.ForeColor = isStreaming ? Color.Yellow : (hasIP ? Color.LightGreen : Color.LightGray);
-            }
+                plotEcg.Model.Title = isStreaming
+                    ? "Сигнал ЭКГ — активная регистрация"
+                    : "Сигнал ЭКГ";
 
-            if (cosDevice != null)
-            {
-                bool isStreaming = _activeWorkers.Any(w => w.Device.Name == cosDevice.Name);
-                bool hasIP = !string.IsNullOrEmpty(cosDevice.HotspotIp);
-                lblCosStatus.Text = $"ESP32_Cos: {(isStreaming ? "Стриминг" : "Отключено")} | IP: {(hasIP ? cosDevice.HotspotIp : "Нет IP")}";
-                lblCosStatus.ForeColor = isStreaming ? Color.Yellow : (hasIP ? Color.LightGreen : Color.LightGray);
-            }
-
-            if (plotSin.Model != null)
-            {
-                bool sinStreaming = _activeWorkers.Any(w => w.Device.Name.Contains("Sin"));
-                plotSin.Model.Title = sinStreaming ?
-                    "ESP32_Sin - АКТИВНЫЙ СТРИМИНГ" :
-                    "ESP32_ECG1 - Сигнал ЭКГ (AD8232)";
-                plotSin.InvalidatePlot(true);
-            }
-
-            if (plotCos.Model != null)
-            {
-                bool cosStreaming = _activeWorkers.Any(w => w.Device.Name.Contains("Cos"));
-                plotCos.Model.Title = cosStreaming ?
-                    "ESP32_Cos - АКТИВНЫЙ СТРИМИНГ" :
-                    "ESP32_Cos - Косинусоидальный сигнал";
-                plotCos.InvalidatePlot(true);
+                plotEcg.InvalidatePlot(true);
             }
         }
 
@@ -476,17 +469,28 @@ namespace ESP32StreamManager
         {
             string ts = DateTime.Now.ToString("HH:mm:ss");
             string tag = string.IsNullOrEmpty(deviceTag) ? "" : $"[{deviceTag}] ";
-            string logMsg = $"[{ts}] [{level}] {tag}{msg}";
+
+            string icon = level switch
+            {
+                "SUCCESS" => "✓",
+                "ERROR" => "!",
+                "WARN" => "⚠",
+                "INFO" => "i",
+                "DATA" => "•",
+                _ => "•"
+            };
+
+            string logMsg = $"{icon}  {ts}  {tag}{msg}";
 
             Color color = level switch
             {
-                "INFO" => Color.Cyan,
-                "SUCCESS" => Color.LightGreen,
-                "WARN" => Color.Yellow,
-                "ERROR" => Color.Red,
-                "DIAG" => Color.Gray,
-                "DATA" => Color.White,
-                _ => Color.White
+                "INFO" => AppTheme.AccentColor,
+                "SUCCESS" => AppTheme.SuccessColor,
+                "WARN" => Color.FromArgb(202, 138, 4),
+                "ERROR" => AppTheme.DangerColor,
+                "DIAG" => AppTheme.MutedTextColor,
+                "DATA" => AppTheme.TextColor,
+                _ => AppTheme.TextColor
             };
 
             if (!_isFormLoaded)
@@ -495,33 +499,58 @@ namespace ESP32StreamManager
                 return;
             }
 
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() => AddLogToTextBox(logMsg, color)));
-            }
+            if (InvokeRequired)
+                Invoke(new Action(() => AddLogToTextBox(logMsg, color)));
             else
-            {
                 AddLogToTextBox(logMsg, color);
-            }
 
             if (level == "ERROR" || level == "SUCCESS")
-            {
                 UpdateUI();
-            }
         }
 
         private void AddLogToTextBox(string logMsg, Color color)
         {
             try
             {
-                txtLog.SelectionStart = txtLog.TextLength;
-                txtLog.SelectionLength = 0;
-                txtLog.SelectionColor = color;
-                txtLog.AppendText(logMsg + Environment.NewLine);
-                txtLog.SelectionColor = txtLog.ForeColor;
-                txtLog.ScrollToCaret();
+                listLog.Items.Add(logMsg);
+
+                if (listLog.Items.Count > 200)
+                    listLog.Items.RemoveAt(0);
+
+                listLog.TopIndex = listLog.Items.Count - 1;
             }
             catch { }
+        }
+
+        private void ListLog_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            if (e.Index < 0) return;
+
+            e.DrawBackground();
+
+            string text = listLog.Items[e.Index].ToString() ?? "";
+
+            Color color = AppTheme.TextColor;
+
+            if (text.StartsWith("✓"))
+                color = AppTheme.SuccessColor;
+            else if (text.StartsWith("!"))
+                color = AppTheme.DangerColor;
+            else if (text.StartsWith("⚠"))
+                color = Color.FromArgb(202, 138, 4);
+            else if (text.StartsWith("i"))
+                color = AppTheme.AccentColor;
+
+            using var brush = new SolidBrush(color);
+
+            e.Graphics.DrawString(
+                text,
+                e.Font ?? listLog.Font,
+                brush,
+                e.Bounds.Left + 8,
+                e.Bounds.Top + 4);
+
+            e.DrawFocusRectangle();
         }
 
         private void LoadConfig()
@@ -539,33 +568,42 @@ namespace ESP32StreamManager
                     _config = new Config
                     {
                         HotspotSsid = "MyHomeWiFi",
-                        HotspotPassword = "mypassword122",
-                        EspDevices = new List<EspDeviceConfig>
+                        HotspotPassword = "mypassword123",
+                        EspDevices = new List<EspDevice>
                         {
-                            new EspDeviceConfig
+                            new EspDevice
                             {
-                                Name = "ESP32_Cos",
-                                ApSsid = "ESP32_Cos_Streamer",
+                                Name = "ESP32_ECG",
+                                ApSsid = "ESP32_ECG_Streamer",
                                 ApPassword = "12345678",
                                 ApIp = "192.168.4.1",
                                 Port = 8888,
-                                HotspotIp = "192.168.137.102",
+                                HotspotIp = "192.168.137.191",
                                 MacAddress = "c4:de:e2:19:2b:6c"
-                            },
-                            new EspDeviceConfig
-                            {
-                                Name = "ESP32_Sin",
-                                ApSsid = "ESP32_Sin_Streamer",
-                                ApPassword = "12345678",
-                                ApIp = "192.168.4.1",
-                                Port = 8888,
-                                HotspotIp = "192.168.137.173",
-                                MacAddress = "cc:7b:5c:34:cc:f8"
                             }
                         }
                     };
+
                     SaveConfig();
                     Log($"Создан новый файл конфигурации: {ConfigFile}", "INFO");
+                }
+
+                _config.EspDevices ??= new List<EspDevice>();
+
+                if (_config.EspDevices.Count == 0)
+                {
+                    _config.EspDevices.Add(new EspDevice
+                    {
+                        Name = "ESP32_ECG",
+                        ApSsid = "ESP32_ECG_Streamer",
+                        ApPassword = "12345678",
+                        ApIp = "192.168.4.1",
+                        Port = 8888,
+                        HotspotIp = "",
+                        MacAddress = ""
+                    });
+
+                    SaveConfig();
                 }
             }
             catch (Exception e)
@@ -579,7 +617,10 @@ namespace ESP32StreamManager
         {
             try
             {
-                string json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
+                string json = JsonSerializer.Serialize(
+                    _config,
+                    new JsonSerializerOptions { WriteIndented = true });
+
                 File.WriteAllText(ConfigFile, json);
                 Log("Конфигурация сохранена", "SUCCESS");
             }
@@ -589,16 +630,41 @@ namespace ESP32StreamManager
             }
         }
 
-        private class LowPassFilter
+        private void CheckEspOnStartup()
         {
-            public double Prev;
-            public bool HasPrev;
+            Log("Проверка доступности устройства при запуске...", "INFO");
+
+            var device = GetMainDevice();
+            if (device == null)
+            {
+                Log("Устройство не задано в конфигурации", "ERROR");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(device.HotspotIp))
+            {
+                bool isAvailable = _networkManager.CheckEspAvailability(
+                    device.HotspotIp,
+                    device.Port,
+                    1000);
+
+                Log(
+                    $"{device.Name} ({device.HotspotIp}): {(isAvailable ? "доступно" : "недоступно")}",
+                    isAvailable ? "SUCCESS" : "WARN",
+                    device.Name);
+
+                Invoke(new Action(() =>
+                {
+                    UpdateDeviceStatusLabel(device, isAvailable, false);
+                }));
+            }
+            else
+            {
+                Log("IP устройства не задан. Выполните поиск устройства.", "WARN");
+            }
+
+            UpdateUI();
         }
-
-        private readonly Dictionary<string, LowPassFilter> _filters
-    = new Dictionary<string, LowPassFilter>();
-
-        private readonly Dictionary<string, double> _prevStage2 = new Dictionary<string, double>();
 
         private void AddDataPoint(string deviceName, string data)
         {
@@ -611,11 +677,11 @@ namespace ESP32StreamManager
 
                 if (!double.TryParse(
                     s,
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
                     out double value))
                 {
-                    Log($"Не удалось распарсить: {data}", "WARN", deviceName);
+                    Log($"Не удалось распарсить значение: {data}", "WARN", deviceName);
                     return;
                 }
 
@@ -625,20 +691,12 @@ namespace ESP32StreamManager
                     return;
                 }
 
-                double filteredValue = value;
-
-                double timestamp =
-                    (DateTime.Now - _plotStartTime).TotalSeconds;
+                double timestamp = (DateTime.Now - _plotStartTime).TotalSeconds;
 
                 if (InvokeRequired)
-                {
-                    Invoke(new Action(() =>
-                        UpdatePlotData(deviceName, timestamp, filteredValue)));
-                }
+                    Invoke(new Action(() => UpdatePlotData(deviceName, timestamp, value)));
                 else
-                {
-                    UpdatePlotData(deviceName, timestamp, filteredValue);
-                }
+                    UpdatePlotData(deviceName, timestamp, value);
             }
             catch (Exception ex)
             {
@@ -650,61 +708,84 @@ namespace ESP32StreamManager
         {
             try
             {
-                if (deviceName.Contains("Sin"))
+                lock (ecgData)
                 {
-                    lock (sinData)
-                    {
-                        sinData.Add(new DataPoint(timestamp, value));
-                        if (sinData.Count > MaxDataPoints)
-                            sinData.RemoveAt(0);
+                    ecgData.Add(new DataPoint(timestamp, value));
 
-                        sinSeries.Points.Clear();
-                        sinSeries.Points.AddRange(sinData);
-                    }
+                    if (ecgData.Count > MaxDataPoints)
+                        ecgData.RemoveAt(0);
 
-                    if (plotSin?.Model?.Axes != null && plotSin.Model.Axes.Count > 1)
-                    {
-                        double minTime = timestamp - _timeWindow;
-                        double maxTime = timestamp;
-                        if (minTime < 0) minTime = 0;
-                        plotSin.Model.Axes[1].Minimum = minTime;
-                        plotSin.Model.Axes[1].Maximum = maxTime;
-                    }
-
-
-                    AutoScaleYAxis(plotSin, sinData);
-
-                    plotSin.InvalidatePlot(true);
+                    ecgSeries.Points.Clear();
+                    ecgSeries.Points.AddRange(ecgData);
                 }
-                else if (deviceName.Contains("Cos"))
+
+                _receivedPoints++;
+
+                UpdateRecordingInfo();
+                UpdateSignalQuality();
+
+                if (plotEcg?.Model?.Axes != null && plotEcg.Model.Axes.Count > 1)
                 {
-                    lock (cosData)
-                    {
-                        cosData.Add(new DataPoint(timestamp, value));
-                        if (cosData.Count > MaxDataPoints)
-                            cosData.RemoveAt(0);
+                    double minTime = Math.Max(0, timestamp - _timeWindow);
+                    double maxTime = Math.Max(timestamp + 1, minTime + 1);
 
-                        cosSeries.Points.Clear();
-                        cosSeries.Points.AddRange(cosData);
-                    }
-
-                    if (plotCos?.Model?.Axes != null && plotCos.Model.Axes.Count > 1)
-                    {
-                        double minTime = Math.Max(0, timestamp - _timeWindow);
-                        double maxTime = Math.Max(timestamp + 1, minTime + 1);
-
-                        plotCos.Model.Axes[1].Minimum = minTime;
-                        plotCos.Model.Axes[1].Maximum = maxTime;
-                    }
-
-                    AutoScaleYAxis(plotCos, cosData);
-
-                    plotCos.InvalidatePlot(true);
+                    plotEcg.Model.Axes[1].Minimum = minTime;
+                    plotEcg.Model.Axes[1].Maximum = maxTime;
                 }
+
+                AutoScaleYAxis(plotEcg, ecgData);
+                plotEcg.InvalidatePlot(true);
             }
             catch (Exception ex)
             {
                 Log($"Ошибка обновления графика: {ex.Message}", "ERROR", deviceName);
+            }
+        }
+
+        private void UpdateRecordingInfo()
+        {
+            if (_recordingStartTime == null)
+            {
+                lblRecordValue.Text = $"00:00 | {_receivedPoints} точек";
+                return;
+            }
+
+            TimeSpan elapsed = DateTime.Now - _recordingStartTime.Value;
+            lblRecordValue.Text = $"{elapsed:mm\\:ss} | {_receivedPoints} точек";
+        }
+
+        private void UpdateSignalQuality()
+        {
+            if (ecgData.Count < 30)
+            {
+                lblQualityValue.Text = "Анализ...";
+                lblQualityValue.ForeColor = AppTheme.MutedTextColor;
+                return;
+            }
+
+            var lastPoints = ecgData
+                .TakeLast(100)
+                .Select(p => p.Y)
+                .ToList();
+
+            double min = lastPoints.Min();
+            double max = lastPoints.Max();
+            double range = max - min;
+
+            if (range < 5)
+            {
+                lblQualityValue.Text = "Слабый";
+                lblQualityValue.ForeColor = Color.FromArgb(202, 138, 4);
+            }
+            else if (range > 3000)
+            {
+                lblQualityValue.Text = "Помехи";
+                lblQualityValue.ForeColor = AppTheme.DangerColor;
+            }
+            else
+            {
+                lblQualityValue.Text = "Хорошее";
+                lblQualityValue.ForeColor = AppTheme.SuccessColor;
             }
         }
 
@@ -720,101 +801,95 @@ namespace ESP32StreamManager
             double maxY = data.Max(p => p.Y);
 
             double range = maxY - minY;
-            double padding = range * 0.1;
+            double padding = range <= 0 ? 10 : range * 0.1;
 
-            yAxis.Minimum = minY - padding;
-            yAxis.Maximum = maxY + padding;
+            yAxis.Minimum = Math.Max(0, minY - padding);
+            yAxis.Maximum = Math.Min(4095, maxY + padding);
         }
 
-        private void ClearPlots()
+        private void ClearPlot()
         {
             try
             {
-                lock (sinData) sinData.Clear();
-                lock (cosData) cosData.Clear();
+                lock (ecgData)
+                    ecgData.Clear();
 
-                sinSeries.Points.Clear();
-                cosSeries.Points.Clear();
+                ecgSeries.Points.Clear();
 
                 _plotStartTime = DateTime.Now;
+                _receivedPoints = 0;
 
-                if (plotSin?.Model?.Axes != null && plotSin.Model.Axes.Count > 1)
+                lblRecordValue.Text = "00:00 | 0 точек";
+                lblQualityValue.Text = "Не определено";
+                lblQualityValue.ForeColor = AppTheme.MutedTextColor;
+
+                if (plotEcg?.Model?.Axes != null && plotEcg.Model.Axes.Count > 1)
                 {
-                    plotSin.Model.Axes[1].Minimum = 0;
-                    plotSin.Model.Axes[1].Maximum = 20;
-                    plotSin.Model.Axes[0].Minimum = -1.5;
-                    plotSin.Model.Axes[0].Maximum = 1.5;
+                    plotEcg.Model.Axes[1].Minimum = 0;
+                    plotEcg.Model.Axes[1].Maximum = 30;
+                    plotEcg.Model.Axes[0].Minimum = 0;
+                    plotEcg.Model.Axes[0].Maximum = 4095;
                 }
 
-                if (plotCos?.Model?.Axes != null && plotCos.Model.Axes.Count > 1)
-                {
-                    plotCos.Model.Axes[1].Minimum = 0;
-                    plotCos.Model.Axes[1].Maximum = 20;
-                    plotCos.Model.Axes[0].Minimum = -1.5;
-                    plotCos.Model.Axes[0].Maximum = 1.5;
-                }
-
-                plotSin.InvalidatePlot(true);
-                plotCos.InvalidatePlot(true);
-
-                Log("Графики очищены", "SUCCESS");
+                plotEcg.InvalidatePlot(true);
+                Log("График очищен", "SUCCESS");
             }
             catch (Exception ex)
             {
-                Log($"Ошибка очистки графиков: {ex.Message}", "ERROR");
+                Log($"Ошибка очистки графика: {ex.Message}", "ERROR");
             }
         }
 
-        // ============= UI BUTTON HANDLERS =============
         private void ConfigureSingleEsp()
         {
-            if (_config.EspDevices.Count == 0)
+            var device = GetMainDevice();
+
+            if (device == null)
             {
-                MessageBox.Show("Нет настроенных устройств.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Устройство не задано в конфигурации.", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            var dialog = new DeviceSelectionDialog(_config.EspDevices, "Выберите устройство для настройки:");
-            if (dialog.ShowDialog() == DialogResult.OK && dialog.SelectedDevice != null)
-            {
-                var device = dialog.SelectedDevice;
+            MessageBox.Show(
+                $"Убедитесь, что {device.Name} включен.\n\n" +
+                $"Для настройки необходимо подключиться к Wi-Fi сети устройства:\n" +
+                $"SSID: {device.ApSsid}\n" +
+                $"Пароль: {device.ApPassword}",
+                "Подготовка к настройке",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
 
-                MessageBox.Show(
-                    $"Убедитесь, что {device.Name} включен и светодиод мигает.\n" +
-                    $"Для настройки необходимо подключиться к WiFi сети:\n" +
-                    $"SSID: {device.ApSsid}\n" +
-                    $"Пароль: {device.ApPassword}",
-                    "Подготовка к настройке",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-
-                Task.Run(() => ConfigureEspDevice(device));
-            }
+            Task.Run(() => ConfigureEspDevice(device));
         }
 
-        private void ConfigureEspDevice(EspDeviceConfig device)
+        private void ConfigureEspDevice(EspDevice device)
         {
             try
             {
                 Log($"Начинаю настройку {device.Name}...", "INFO", device.Name);
 
                 bool connected = _networkManager.IsConnectedToNetwork(device.ApSsid);
+
                 if (!connected)
                 {
-                    Log($"Не подключен к сети {device.ApSsid}. Пытаюсь подключиться...", "WARN", device.Name);
+                    Log($"Не подключен к сети {device.ApSsid}", "WARN", device.Name);
 
-                    this.Invoke(new Action(() =>
+                    Invoke(new Action(() =>
                     {
                         var result = MessageBox.Show(
-                            $"Необходимо подключиться к сети {device.ApSsid}\n" +
-                            $"Автоматически подключиться к WiFi?",
-                            "Подключение к WiFi",
+                            $"Необходимо подключиться к сети {device.ApSsid}.\n\n" +
+                            $"Выполнить автоматическое подключение?",
+                            "Подключение к Wi-Fi",
                             MessageBoxButtons.YesNo,
                             MessageBoxIcon.Question);
 
                         if (result == DialogResult.Yes)
                         {
-                            bool success = _networkManager.ConnectToEspNetwork(device.ApSsid, device.ApPassword);
+                            bool success = _networkManager.ConnectToEspNetwork(
+                                device.ApSsid,
+                                device.ApPassword);
+
                             if (success)
                             {
                                 Thread.Sleep(3000);
@@ -836,7 +911,7 @@ namespace ESP32StreamManager
             }
         }
 
-        private void SendWifiCredentialsToEsp(EspDeviceConfig device)
+        private void SendWifiCredentialsToEsp(EspDevice device)
         {
             try
             {
@@ -849,8 +924,7 @@ namespace ESP32StreamManager
                 }
 
                 Log($"{device.Name} доступен", "SUCCESS", device.Name);
-
-                Log($"Отправляю данные WiFi на {device.Name}...", "INFO", device.Name);
+                Log("Отправляю параметры Wi-Fi...", "INFO", device.Name);
 
                 bool success = _networkManager.SendWifiCredentialsToEsp(
                     device.ApIp,
@@ -861,25 +935,24 @@ namespace ESP32StreamManager
 
                 if (success)
                 {
-                    Log($"Данные WiFi отправлены. {device.Name} перезагружается...", "SUCCESS", device.Name);
+                    Log($"{device.Name} перезагружается и подключается к сети...", "SUCCESS", device.Name);
 
-                    this.Invoke(new Action(() =>
+                    Invoke(new Action(() =>
                     {
                         MessageBox.Show(
-                            $"{device.Name} перезагружается и подключится к сети {_config.HotspotSsid}\n" +
-                            $"Это займет 5-10 секунд.",
-                            "Перезагрузка ESP",
+                            $"{device.Name} перезагружается и подключится к сети {_config.HotspotSsid}.\n" +
+                            "После этого можно выполнить поиск устройства.",
+                            "Перезагрузка ESP32",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information);
                     }));
 
                     Thread.Sleep(7000);
-
                     FindAndSaveEspInNetwork(device);
                 }
                 else
                 {
-                    Log($"Не удалось отправить данные WiFi", "ERROR", device.Name);
+                    Log("Не удалось отправить параметры Wi-Fi", "ERROR", device.Name);
                 }
             }
             catch (Exception ex)
@@ -888,40 +961,158 @@ namespace ESP32StreamManager
             }
         }
 
+        private void StreamFromSingleEsp()
+        {
+            var device = GetMainDevice();
+
+            if (device == null)
+            {
+                MessageBox.Show("Устройство не задано в конфигурации.", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string ip = !string.IsNullOrEmpty(device.HotspotIp)
+                ? device.HotspotIp
+                : device.ApIp;
+
+            if (!_networkManager.CheckEspAvailability(ip, device.Port))
+            {
+                MessageBox.Show($"{device.Name} недоступен по адресу {ip}.",
+                    "Ошибка подключения",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return;
+            }
+
+            StopAllStreams();
+            ClearPlot();
+
+            _recordingStartTime = DateTime.Now;
+            _receivedPoints = 0;
+
+            var worker = new StreamWorker(this, device, ip);
+
+            worker.DataReceived += (devName, data) =>
+            {
+                AddDataPoint(devName, data);
+            };
+
+            worker.Start();
+
+            Log($"Регистрация сигнала начата: {device.Name}", "SUCCESS", device.Name);
+            UpdateUI();
+        }
+
+        private void StopSingleStream()
+        {
+            var device = GetMainDevice();
+
+            if (device == null)
+                return;
+
+            var worker = _activeWorkers.FirstOrDefault(w => w.Device.Name == device.Name);
+
+            if (worker == null)
+            {
+                MessageBox.Show("Нет активной регистрации для остановки.",
+                    "Информация",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            worker.Stop();
+
+            _recordingStartTime = null;
+            lblRecordValue.Text = $"Остановлена | {_receivedPoints} точек";
+
+            Log($"Регистрация остановлена: {device.Name}", "SUCCESS", device.Name);
+            UpdateUI();
+        }
+
+        private void StopAllStreams()
+        {
+            lock (_activeWorkers)
+            {
+                foreach (var worker in _activeWorkers.ToList())
+                    worker.Stop();
+
+                _activeWorkers.Clear();
+            }
+
+            UpdateUI();
+        }
+
+        private void FindEspInHotspotNetwork()
+        {
+            var device = GetMainDevice();
+
+            if (device == null)
+            {
+                MessageBox.Show("Устройство не задано в конфигурации.", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            Log("Поиск ESP32 в сети...", "INFO", device.Name);
+
+            Task.Run(() =>
+            {
+                bool found = FindAndSaveEspInNetwork(device);
+
+                if (found)
+                {
+                    SaveConfig();
+                    Log("Устройство найдено", "SUCCESS", device.Name);
+                }
+                else
+                {
+                    Log("Устройство не найдено", "ERROR", device.Name);
+                }
+
+                UpdateUI();
+            });
+        }
+
         private List<string> GetHotspotClientsIps()
         {
             var ips = new List<string>();
 
-            var process = new Process
+            try
             {
-                StartInfo = new ProcessStartInfo
+                var process = new Process
                 {
-                    FileName = "arp",
-                    Arguments = "-a",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "arp",
+                        Arguments = "-a",
+                        RedirectStandardOutput = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
 
-            process.Start();
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit();
+                process.Start();
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
 
-            var regex = new Regex(@"\b192\.168\.137\.\d+\b");
+                var regex = new Regex(@"\b192\.168\.137\.\d+\b");
 
-            foreach (Match m in regex.Matches(output))
-                ips.Add(m.Value);
+                foreach (Match m in regex.Matches(output))
+                    ips.Add(m.Value);
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка получения ARP-таблицы: {ex.Message}", "ERROR");
+            }
 
             return ips.Distinct().ToList();
         }
 
-        private bool FindAndSaveEspInNetwork(EspDeviceConfig device)
+        private bool FindAndSaveEspInNetwork(EspDevice device)
         {
-            int deviceIndex = _config.EspDevices.IndexOf(device);
-            string deviceType = deviceIndex == 0 ? "Cos" : "Sin";
-
-            Log($"Поиск {device.Name} ({deviceType}) в домашней сети...", "INFO", device.Name);
+            Log($"Поиск {device.Name} в сети...", "INFO", device.Name);
 
             if (!string.IsNullOrEmpty(device.HotspotIp))
             {
@@ -932,7 +1123,7 @@ namespace ESP32StreamManager
                 }
             }
 
-            Log("Получение списка устройств хот-спота...", "INFO", device.Name);
+            Log("Проверяю устройства в сети хот-спота...", "INFO", device.Name);
 
             var hotspotIps = GetHotspotClientsIps();
 
@@ -941,259 +1132,43 @@ namespace ESP32StreamManager
                 if (_networkManager.CheckEspAvailability(ip, device.Port, 500))
                 {
                     device.HotspotIp = ip;
-                    Log($"{device.Name} найден через хот-спот: {ip}", "SUCCESS", device.Name);
+
+                    Log($"{device.Name} найден: {ip}", "SUCCESS", device.Name);
                     SaveConfig();
-                    UpdateUI();
+
+                    Invoke(new Action(() =>
+                    {
+                        UpdateDeviceStatusLabel(device, true, false);
+                    }));
+
                     return true;
                 }
             }
 
-            Log("ESP не найден в хот-споте, fallback-скан...", "WARN", device.Name);
+            Log("Быстрый поиск не дал результата, выполняю сканирование...", "WARN", device.Name);
 
             for (int i = 1; i <= 254; i++)
             {
                 string testIp = $"192.168.137.{i}";
+
                 if (_networkManager.CheckEspAvailability(testIp, device.Port, 100))
                 {
                     device.HotspotIp = testIp;
-                    Log($"{device.Name} найден fallback-сканом: {testIp}", "SUCCESS", device.Name);
+
+                    Log($"{device.Name} найден: {testIp}", "SUCCESS", device.Name);
                     SaveConfig();
-                    UpdateUI();
+
+                    Invoke(new Action(() =>
+                    {
+                        UpdateDeviceStatusLabel(device, true, false);
+                    }));
+
                     return true;
                 }
             }
 
             Log($"{device.Name} не найден в сети", "WARN", device.Name);
             return false;
-        }
-
-
-        private void StreamFromSingleEsp()
-        {
-            if (_config.EspDevices.Count == 0)
-            {
-                MessageBox.Show("Нет настроенных устройств.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var dialog = new DeviceSelectionDialog(_config.EspDevices, "Выберите устройство для стриминга:");
-            if (dialog.ShowDialog() == DialogResult.OK && dialog.SelectedDevice != null)
-            {
-                var device = dialog.SelectedDevice;
-
-                string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
-
-                if (_networkManager.CheckEspAvailability(ip, device.Port))
-                {
-                    StopAllStreamsMenu();
-
-                    var worker = new StreamWorker(this, device, ip);
-                    worker.DataReceived += (devName, data) =>
-                    {
-                        Log(data, "DATA", devName);
-                        AddDataPoint(devName, data);
-                        UpdateUI();
-                    };
-
-                    worker.Start();
-                    Log($"Стриминг начат с {device.Name}", "SUCCESS", device.Name);
-                }
-                else
-                {
-                    MessageBox.Show($"{device.Name} недоступен по адресу {ip}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
-
-        private void StopSingleStream()
-        {
-            if (_config.EspDevices.Count == 0)
-            {
-                MessageBox.Show("Нет настроенных устройств.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var activeDevices = _config.EspDevices
-                .Where(d => _activeWorkers.Any(w => w.Device.Name == d.Name))
-                .ToList();
-
-            if (activeDevices.Count == 0)
-            {
-                MessageBox.Show("Нет активных стримов для остановки.", "Информация",
-                               MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            var dialog = new DeviceSelectionDialog(activeDevices, "Выберите устройство для остановки стриминга:");
-            if (dialog.ShowDialog() == DialogResult.OK && dialog.SelectedDevice != null)
-            {
-                var device = dialog.SelectedDevice;
-
-                var worker = _activeWorkers.FirstOrDefault(w => w.Device.Name == device.Name);
-                if (worker != null)
-                {
-                    worker.Stop();
-                    Log($"Стриминг остановлен для {device.Name}", "SUCCESS", device.Name);
-                }
-                else
-                {
-                    MessageBox.Show($"Стриминг для {device.Name} не найден.", "Ошибка",
-                                   MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
-
-        private void FindEspInHotspotNetwork()
-        {
-            Log("Поиск ESP в домашней сети...", "INFO");
-
-            Task.Run(() =>
-            {
-                bool foundAny = false;
-                foreach (var device in _config.EspDevices)
-                {
-                    if (FindAndSaveEspInNetwork(device))
-                    {
-                        foundAny = true;
-                    }
-                }
-
-                if (foundAny)
-                {
-                    SaveConfig();
-                    UpdateUI();
-                    Log("Поиск завершен успешно", "SUCCESS");
-                }
-                else
-                {
-                    Log("ESP не найдены в сети", "ERROR");
-                }
-            });
-        }
-
-        private void ConfigureTwoEspParallel()
-        {
-            Log("Параллельная настройка двух ESP...", "INFO");
-
-            if (_config.EspDevices.Count < 2)
-            {
-                MessageBox.Show("Требуется минимум 2 устройства.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var result = MessageBox.Show(
-                "ПАРАЛЛЕЛЬНАЯ НАСТРОЙКА ДВУХ ESP\n\n" +
-                $"1. {_config.EspDevices[0].Name} -> {_config.EspDevices[0].ApSsid}\n" +
-                $"2. {_config.EspDevices[1].Name} -> {_config.EspDevices[1].ApSsid}\n\n" +
-                "Убедитесь, что ESP включены и мигают светодиоды.\n" +
-                "Продолжить?",
-                "Параллельная настройка",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information);
-
-            if (result == DialogResult.Yes)
-            {
-                if (string.IsNullOrEmpty(_config.HotspotSsid) || string.IsNullOrEmpty(_config.HotspotPassword))
-                {
-                    using (var form = new SimpleNetworkDialog(_config))
-                    {
-                        if (form.ShowDialog() == DialogResult.OK)
-                        {
-                            _config.HotspotSsid = form.Ssid;
-                            _config.HotspotPassword = form.Password;
-                            SaveConfig();
-                        }
-                        else
-                        {
-                            return;
-                        }
-                    }
-                }
-
-                StopAllStreamsMenu();
-
-                foreach (var device in _config.EspDevices)
-                {
-                    Log($"Настройка {device.Name}...", "INFO", device.Name);
-                    ConfigureEspDevice(device);
-                    Thread.Sleep(1000);
-                }
-
-                Log("Параллельная настройка завершена", "INFO");
-            }
-        }
-
-        private async void StreamFromTwoEspParallel()
-        {
-            if (_config.EspDevices.Count < 2)
-            {
-                MessageBox.Show("Требуется минимум 2 устройства.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            Log("Запуск параллельного стриминга...", "INFO");
-
-            ClearPlots();
-
-            StopAllStreamsMenu();
-
-            bool allConnected = true;
-            var workers = new List<StreamWorker>();
-
-            foreach (var device in _config.EspDevices)
-            {
-                string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
-
-                if (!_networkManager.CheckEspAvailability(ip, device.Port, 2000))
-                {
-                    Log($"{device.Name} недоступен по адресу {ip}", "ERROR", device.Name);
-                    allConnected = false;
-                    break;
-                }
-            }
-
-            if (!allConnected)
-            {
-                MessageBox.Show("Не все ESP доступны. Проверьте подключение.", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            foreach (var device in _config.EspDevices)
-            {
-                string ip = !string.IsNullOrEmpty(device.HotspotIp) ? device.HotspotIp : device.ApIp;
-
-                var worker = new StreamWorker(this, device, ip);
-                worker.DataReceived += (devName, data) =>
-                {
-                    Log(data, "DATA", devName);
-                    AddDataPoint(devName, data);
-                    UpdateUI();
-                };
-
-                workers.Add(worker);
-                worker.Start();
-                await Task.Delay(500);
-            }
-
-            Log("Параллельный стриминг запущен!", "SUCCESS");
-            UpdateUI();
-        }
-
-        private void StopAllStreamsMenu()
-        {
-            Log("Останавливаю все стримы...", "INFO");
-
-            lock (_activeWorkers)
-            {
-                foreach (var worker in _activeWorkers.ToList())
-                {
-                    worker.Stop();
-                }
-                _activeWorkers.Clear();
-            }
-
-            Log("Все стримы остановлены", "SUCCESS");
-            UpdateUI();
         }
     }
 }

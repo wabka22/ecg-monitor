@@ -5,7 +5,7 @@ namespace ESP32StreamManager
 {
     public class StreamWorker
     {
-        public EspDeviceConfig Device { get; }
+        public EspDevice Device { get; }
         public string Ip { get; }
         private volatile bool _running = false;
         private TcpClient _client;
@@ -16,7 +16,7 @@ namespace ESP32StreamManager
 
         public event Action<string, string> DataReceived;
 
-        public StreamWorker(MainForm mainForm, EspDeviceConfig device, string ip)
+        public StreamWorker(MainForm mainForm, EspDevice device, string ip)
         {
             _mainForm = mainForm;
             Device = device;
