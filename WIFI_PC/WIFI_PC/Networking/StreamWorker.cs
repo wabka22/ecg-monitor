@@ -8,11 +8,12 @@ namespace ESP32StreamManager
         public EspDevice Device { get; }
         public string Ip { get; }
         private volatile bool _running = false;
-        private TcpClient _client;
-        private NetworkStream _stream;
-        private StreamReader _reader;
-        private Thread _workerThread;
-        private MainForm _mainForm;
+        private TcpClient? _client;
+        private NetworkStream? _stream;
+        private StreamReader? _reader;
+        private Thread? _workerThread;
+        private readonly MainForm _mainForm;
+        private bool _stopped = false;
 
         public event Action<string, string> DataReceived;
 
@@ -37,6 +38,7 @@ namespace ESP32StreamManager
                 _client = new TcpClient();
                 _client.Connect(Ip, Device.Port);
                 _stream = _client.GetStream();
+                _stream.ReadTimeout = 1000;
                 _reader = new StreamReader(_stream);
 
                 byte[] cmdBytes = Encoding.UTF8.GetBytes("START_STREAM\n");
@@ -59,17 +61,21 @@ namespace ESP32StreamManager
                 {
                     try
                     {
-                        if (_stream.DataAvailable)
+                        string data = _reader.ReadLine();
+
+                        if (!string.IsNullOrWhiteSpace(data))
                         {
-                            string data = _reader.ReadLine();
-                            if (!string.IsNullOrEmpty(data))
-                            {
-                                DataReceived?.Invoke(Device.Name, data);
-                            }
+                            DataReceived?.Invoke(Device.Name, data);
                         }
-                        Thread.Sleep(10);
                     }
-                    catch { break; }
+                    catch (IOException)
+                    {
+                        continue;
+                    }
+                    catch
+                    {
+                        break;
+                    }
                 }
             }
             catch (Exception ex)
@@ -87,27 +93,47 @@ namespace ESP32StreamManager
 
         public void Stop()
         {
+            if (_stopped)
+                return;
+
+            _stopped = true;
             _running = false;
+
             try
             {
-                if (_stream != null)
+                if (_stream != null && _client != null && _client.Connected)
                 {
                     byte[] stopBytes = Encoding.UTF8.GetBytes("STOP_STREAM\n");
                     _stream.Write(stopBytes, 0, stopBytes.Length);
+                    _stream.Flush();
                     Thread.Sleep(100);
                 }
+            }
+            catch { }
+
+            try
+            {
+                _reader?.Close();
+                _stream?.Close();
                 _client?.Close();
+            }
+            catch { }
 
-                lock (_mainForm._activeWorkers)
+            lock (_mainForm._activeWorkers)
+            {
+                _mainForm._activeWorkers.Remove(this);
+            }
+
+            try
+            {
+                if (!_mainForm.IsDisposed && _mainForm.IsHandleCreated)
                 {
-                    _mainForm._activeWorkers.Remove(this);
+                    _mainForm.Invoke(new Action(() =>
+                    {
+                        _mainForm.Log("СТРИМИНГ ОСТАНОВЛЕН", "INFO", Device.Name);
+                        _mainForm.UpdateUI();
+                    }));
                 }
-
-                _mainForm.Invoke(new Action(() =>
-                {
-                    _mainForm.Log("СТРИМИНГ ОСТАНОВЛЕН", "INFO", Device.Name);
-                    _mainForm.UpdateUI();
-                }));
             }
             catch { }
         }

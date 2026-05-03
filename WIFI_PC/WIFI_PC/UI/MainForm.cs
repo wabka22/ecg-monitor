@@ -7,6 +7,7 @@ using OxyPlot;
 using OxyPlot.Axes;
 using OxyPlot.Series;
 using OxyPlot.WindowsForms;
+using NumSharp;
 using ESP32StreamManager.ML;
 
 namespace ESP32StreamManager
@@ -33,6 +34,8 @@ namespace ESP32StreamManager
         private Button btnFindEsp;
         private Button btnClearPlot;
         private Button btnTogglePrediction;
+        private Button btnOpenConfig;
+        private Button btnHotspot;
 
         private Label lblTitle;
         private Label lblStatus;
@@ -49,7 +52,7 @@ namespace ESP32StreamManager
 
         private readonly List<DataPoint> ecgData = new();
 
-        private const int MaxDataPoints = 1250;
+        private const int MaxDataPoints = 3000;
         private LineSeries ecgSeries;
 
         private ScatterSeries qrsSeries;
@@ -212,21 +215,25 @@ namespace ESP32StreamManager
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 9,
+                RowCount = 11,
                 BackColor = AppTheme.PanelBackColor
             };
 
             controlsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 85));
-            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            controlsLayout.RowStyles.Clear();
+
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 45));   // Заголовок
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));   // Подсказка
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Найти
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Wi-Fi
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Хот-спот
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));   // Старт
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));   // Стоп
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Очистить
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Предсказания
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));   // Настройки
+            controlsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // Остаток
 
             var lblControl = new Label
             {
@@ -252,6 +259,9 @@ namespace ESP32StreamManager
             btnConfigureEsp = UiFactory.CreateSecondaryButton("📶  Настроить Wi-Fi");
             btnConfigureEsp.Click += (s, e) => ConfigureSingleEsp();
 
+            btnHotspot = UiFactory.CreateSecondaryButton("📡  Хот-спот Windows");
+            btnHotspot.Click += (s, e) => OpenMobileHotspotSettings();
+
             btnStartStream = UiFactory.CreatePrimaryButton("▶  НАЧАТЬ ЗАПИСЬ");
             btnStartStream.Click += (s, e) => StreamFromSingleEsp();
 
@@ -264,14 +274,19 @@ namespace ESP32StreamManager
             btnTogglePrediction = UiFactory.CreateSecondaryButton("🧠  Предсказания: ВЫКЛ");
             btnTogglePrediction.Click += (s, e) => TogglePrediction();
 
+            btnOpenConfig = UiFactory.CreateSecondaryButton("⚙  Настройки");
+            btnOpenConfig.Click += (s, e) => OpenConfigEditor();
+
             controlsLayout.Controls.Add(lblControl, 0, 0);
             controlsLayout.Controls.Add(lblHint, 0, 1);
             controlsLayout.Controls.Add(btnFindEsp, 0, 2);
             controlsLayout.Controls.Add(btnConfigureEsp, 0, 3);
-            controlsLayout.Controls.Add(btnStartStream, 0, 4);
-            controlsLayout.Controls.Add(btnStopStream, 0, 5);
-            controlsLayout.Controls.Add(btnClearPlot, 0, 6);
-            controlsLayout.Controls.Add(btnTogglePrediction, 0, 7);
+            controlsLayout.Controls.Add(btnHotspot, 0, 4);
+            controlsLayout.Controls.Add(btnStartStream, 0, 5);
+            controlsLayout.Controls.Add(btnStopStream, 0, 6);
+            controlsLayout.Controls.Add(btnClearPlot, 0, 7);
+            controlsLayout.Controls.Add(btnTogglePrediction, 0, 8);
+            controlsLayout.Controls.Add(btnOpenConfig, 0, 9);
 
             controlPanel.Controls.Add(controlsLayout);
 
@@ -353,8 +368,8 @@ namespace ESP32StreamManager
                 MinorGridlineStyle = LineStyle.Dot,
                 MajorGridlineColor = OxyColor.FromRgb(226, 232, 240),
                 MinorGridlineColor = OxyColor.FromRgb(241, 245, 249),
-                Minimum = -1000,
-                Maximum = 1000
+                Minimum = -10,
+                Maximum = 10
             });
 
             model.Axes.Add(new LinearAxis
@@ -409,32 +424,6 @@ namespace ESP32StreamManager
             model.Series.Add(qrsAfterSpikeSeries);
 
             plotEcg.Model = model;
-        }
-
-        private void TogglePrediction()
-        {
-            if (_segmenter == null)
-            {
-                MessageBox.Show(
-                    "Модель не загружена. Проверьте файл ML/best_model.onnx.",
-                    "Предсказания недоступны",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-
-                return;
-            }
-
-            _predictionEnabled = !_predictionEnabled;
-
-            btnTogglePrediction.Text = _predictionEnabled
-                ? "🧠  Предсказания: ВКЛ"
-                : "🧠  Предсказания: ВЫКЛ";
-
-            Log(
-                _predictionEnabled
-                    ? "Нейросетевые предсказания включены"
-                    : "Нейросетевые предсказания выключены",
-                "INFO");
         }
 
         private void MainForm_Load(object sender, EventArgs e)
@@ -800,11 +789,7 @@ namespace ESP32StreamManager
             }
         }
 
-        private void UpdatePlotData(
-            string deviceName,
-            double timestamp,
-            double value,
-            EcgPrediction prediction)
+        private void UpdatePlotData(string deviceName, double timestamp,double value, EcgPrediction prediction)
         {
             try
             {
@@ -849,10 +834,7 @@ namespace ESP32StreamManager
             }
         }
 
-        private void AddPredictionPoint(
-            double timestamp,
-            double value,
-            EcgPrediction prediction)
+        private void AddPredictionPoint( double timestamp,double value, EcgPrediction prediction)
         {
                 Log(
         $"Prediction: {prediction.Type}, prob={prediction.Probability:0.000}",
@@ -959,20 +941,14 @@ namespace ESP32StreamManager
 
         private void AutoScaleYAxis(PlotView plot, List<DataPoint> data)
         {
-            if (plot?.Model?.Axes == null || plot.Model.Axes.Count == 0 || data.Count == 0)
+            if (plot?.Model?.Axes == null || plot.Model.Axes.Count == 0)
                 return;
 
             var yAxis = plot.Model.Axes[0] as LinearAxis;
             if (yAxis == null) return;
 
-            double minY = data.Min(p => p.Y);
-            double maxY = data.Max(p => p.Y);
-
-            double range = maxY - minY;
-            double padding = range <= 0 ? 10 : range * 0.1;
-
-            yAxis.Minimum = Math.Max(0, minY - padding);
-            yAxis.Maximum = Math.Min(4095, maxY + padding);
+            yAxis.Minimum = -10;
+            yAxis.Maximum = 10;
         }
 
         private void ClearPlot()
@@ -1000,8 +976,8 @@ namespace ESP32StreamManager
                 {
                     plotEcg.Model.Axes[1].Minimum = 0;
                     plotEcg.Model.Axes[1].Maximum = 30;
-                    plotEcg.Model.Axes[0].Minimum = 0;
-                    plotEcg.Model.Axes[0].Maximum = 4095;
+                    plotEcg.Model.Axes[0].Minimum = -10;
+                    plotEcg.Model.Axes[0].Maximum = 10;
                 }
 
                 plotEcg.InvalidatePlot(true);
@@ -1011,29 +987,6 @@ namespace ESP32StreamManager
             {
                 Log($"Ошибка очистки графика: {ex.Message}", "ERROR");
             }
-        }
-
-        private void ConfigureSingleEsp()
-        {
-            var device = GetMainDevice();
-
-            if (device == null)
-            {
-                MessageBox.Show("Устройство не задано в конфигурации.", "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            MessageBox.Show(
-                $"Убедитесь, что {device.Name} включен.\n\n" +
-                $"Для настройки необходимо подключиться к Wi-Fi сети устройства:\n" +
-                $"SSID: {device.ApSsid}\n" +
-                $"Пароль: {device.ApPassword}",
-                "Подготовка к настройке",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
-
-            Task.Run(() => ConfigureEspDevice(device));
         }
 
         private void ConfigureEspDevice(EspDevice device)
@@ -1217,37 +1170,6 @@ namespace ESP32StreamManager
             UpdateUI();
         }
 
-        private void FindEspInHotspotNetwork()
-        {
-            var device = GetMainDevice();
-
-            if (device == null)
-            {
-                MessageBox.Show("Устройство не задано в конфигурации.", "Ошибка",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            Log("Поиск ESP32 в сети...", "INFO", device.Name);
-
-            Task.Run(() =>
-            {
-                bool found = FindAndSaveEspInNetwork(device);
-
-                if (found)
-                {
-                    SaveConfig();
-                    Log("Устройство найдено", "SUCCESS", device.Name);
-                }
-                else
-                {
-                    Log("Устройство не найдено", "ERROR", device.Name);
-                }
-
-                UpdateUI();
-            });
-        }
-
         private List<string> GetHotspotClientsIps()
         {
             var ips = new List<string>();
@@ -1282,6 +1204,7 @@ namespace ESP32StreamManager
 
             return ips.Distinct().ToList();
         }
+
 
         private bool FindAndSaveEspInNetwork(EspDevice device)
         {
