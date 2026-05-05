@@ -3,6 +3,7 @@
 #include <WiFiAP.h>
 #include <Preferences.h>
 #include <math.h>
+#include "ecg_data.h"
 
 Preferences prefs;
 WiFiServer server(8888);
@@ -15,9 +16,9 @@ bool isStreaming = false;
 String savedSSID = "";
 String savedPass = "";
 
-float cosineTime = 0.0;
+uint16_t ecgSampleIndex = 0;
+uint8_t ecgLeadIndex = 0;
 const float SAMPLE_RATE = 100.0;
-const float FREQUENCY = 1.0;
 unsigned long lastSampleTime = 0;
 const unsigned long SAMPLE_INTERVAL = (unsigned long)(1000.0 / SAMPLE_RATE);
 
@@ -41,7 +42,7 @@ int ledOffDuration = 0;
 void connectToWiFi();
 void handleWiFiReconnection();
 void printNetworkStatus(WiFiClient& client);
-void streamCosineWaveTick();
+void streamEcgTick();
 void updateLED();
 void setLEDState(LEDState state);
 
@@ -64,7 +65,7 @@ void setup() {
   WiFi.mode(WIFI_AP);
   Serial.println("Setting up AP mode...");
   
-  if (!WiFi.softAP("ESP32_Cos_Streamer", "12345678")) {
+  if (!WiFi.softAP("ESP32_ECG_Streamer", "12345678")) {
     Serial.println("ERROR: Failed to setup AP!");
     setLEDState(LED_VERY_FAST_BLINK);
   } else {
@@ -211,7 +212,7 @@ void printNetworkStatus(WiFiClient& client) {
   client.println("=============================");
 }
 
-void streamCosineWaveTick() {
+void streamEcgTick() {
   if (!activeClient.connected()) {
     Serial.println("Stream client disconnected");
     isStreaming = false;
@@ -236,12 +237,15 @@ void streamCosineWaveTick() {
   if (now - lastSampleTime < SAMPLE_INTERVAL) return;
   lastSampleTime = now;
 
-  float normalizedValue = cos(2 * PI * FREQUENCY * cosineTime);
-  cosineTime += 1.0 / SAMPLE_RATE;
-  if (cosineTime > 100000) cosineTime = 0;
+  int16_t ecgValue = pgm_read_word(&ECG_DATA[ecgLeadIndex][ecgSampleIndex]);
 
-  activeClient.println(String(normalizedValue, 3));
-  
+  activeClient.println(ecgValue);
+
+  ecgSampleIndex++;
+  if (ecgSampleIndex >= ECG_SAMPLES) {
+    ecgSampleIndex = 0;
+  }
+
   yield();
 }
 
@@ -250,7 +254,7 @@ void loop() {
   updateLED();
 
   if (isStreaming) {
-    streamCosineWaveTick();
+    streamEcgTick();
     return;
   }
 
@@ -311,12 +315,13 @@ void loop() {
   }
 
   else if (command == "START_STREAM") {
-    Serial.println("Starting cosine wave stream");
+    Serial.println("Starting ECG stream");
     client.println("OK");
     client.flush();
     isStreaming = true;
     activeClient = client;
-    cosineTime = 0;
+    ecgSampleIndex = 0;
+    ecgLeadIndex = 0;
     lastSampleTime = millis();
     setLEDState(LED_ON);
     return;

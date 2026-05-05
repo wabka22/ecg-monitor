@@ -368,8 +368,8 @@ namespace ESP32StreamManager
                 MinorGridlineStyle = LineStyle.Dot,
                 MajorGridlineColor = OxyColor.FromRgb(226, 232, 240),
                 MinorGridlineColor = OxyColor.FromRgb(241, 245, 249),
-                Minimum = -10,
-                Maximum = 10
+                Minimum = -2500,
+                Maximum = 2500
             });
 
             model.Axes.Add(new LinearAxis
@@ -947,8 +947,8 @@ namespace ESP32StreamManager
             var yAxis = plot.Model.Axes[0] as LinearAxis;
             if (yAxis == null) return;
 
-            yAxis.Minimum = -10;
-            yAxis.Maximum = 10;
+            yAxis.Minimum = -2500;
+            yAxis.Maximum = 2500;
         }
 
         private void ClearPlot()
